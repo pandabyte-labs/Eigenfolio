@@ -1,0 +1,9 @@
+services:
+  eigenfolio:
+    image: pandabytelabs/eigenfolio:latest
+    container_name: eigenfolio
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      DISABLE_CLOUD_CONNECT: "false"
