@@ -37,7 +37,6 @@ body {
 
 /* Sidebar */
 .sidebar {
-  border-right: 1px solid rgba(15, 23, 42, 0.85);
   padding: 1.5rem 1.25rem;
   background: linear-gradient(
       145deg,
@@ -613,3 +612,230 @@ body {
 .sidebar-footer a:hover {
   text-decoration: underline;
 }
+
+
+/* Holdings grid layout */
+.holdings-header-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.holdings-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.1fr) minmax(0, 1.4fr);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.holdings-header--right {
+  border-left: 1px solid var(--border-subtle);
+  padding-left: 0.75rem;
+}
+
+.holdings-grid {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 280px));
+  justify-content: flex-start;
+}
+
+.holding-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.1fr) minmax(0, 1.4fr);
+  align-items: baseline;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.6rem;
+  background: var(--bg-elevated-soft);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.82rem;
+}
+
+.holding-row__asset {
+  font-weight: 500;
+}
+
+.holding-row__amount {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.holding-row__value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* On small screens use one column for holdings */
+@media (max-width: 960px) {
+  .holdings-grid {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 280px));
+  justify-content: flex-start;
+}
+}
+
+/* Make datetime-local calendar icon lighter to fit dark theme */
+.form-row input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.9);
+  opacity: 0.8;
+}
+
+
+.btn-icon-close {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.6rem;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.btn-icon-close:hover {
+  color: var(--text);
+}
+
+
+.table-holdings {
+  margin-top: 0.75rem;
+  margin-left: auto;
+  margin-right: auto;
+  max-width: 900px;
+}
+
+.table-holdings th,
+.table-holdings td {
+  padding: 0.15rem 0.25rem;
+  font-size: 0.82rem;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.table-holdings th:nth-child(1),
+.table-holdings td:nth-child(1),
+.table-holdings th:nth-child(5),
+.table-holdings td:nth-child(5) {
+  max-width: 6rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.table-holdings-divider-cell {
+  width: 0.25rem;
+  padding: 0;
+  border-left: 1px solid var(--border-subtle);
+}
+.holdings-summary {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.holdings-summary-item {
+  flex: 1 1 160px;
+  background: var(--bg-elevated-soft);
+  border-radius: 0.75rem;
+  border: 1px solid var(--border-subtle);
+  padding: 0.6rem 0.9rem;
+}
+
+.holdings-summary-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 0.15rem;
+}
+
+.holdings-summary-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.holdings-grid {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 280px));
+  justify-content: flex-start;
+}
+
+.holding-card {
+  background: var(--bg-elevated-soft);
+  border-radius: 0.75rem;
+  border: 1px solid var(--border-subtle);
+  padding: 0.75rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-width: 320px;
+  width: 100%;
+}
+
+.holding-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.25rem;
+}
+
+.holding-asset {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.holding-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.holding-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  padding: 0.1rem 0;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+}
+
+.holding-label {
+  color: var(--text-muted);
+  margin-right: 0.5rem;
+}
+
+.holding-value {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.holding-value-na {
+  margin-right: 0.5rem;
+  color: var(--text-muted);
+}
+
+.icon-button {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 1rem;
+  color: var(--text-muted);
+}
+
+.icon-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
