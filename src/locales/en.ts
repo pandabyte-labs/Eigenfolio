@@ -1,8 +1,8 @@
-  const en: Record<string, string> = {
+export const en: Record<string, string> = {
   action_delete: "Delete",
   action_edit: "Edit",
-  action_export_pdf: "Export tax PDF",
-  app_subtitle: "Self-hosted crypto portfolio & tax overview",
+  action_export_pdf: "Export report PDF",
+  app_subtitle: "Self-hosted crypto portfolio",
   app_title: "Eigenfolio",
   cloud_backup_error_decrypt_failed: "The backup could not be decrypted. Please verify the password and the file.",
   cloud_backup_error_failed: "Failed to create the encrypted backup.",
@@ -137,7 +137,7 @@
   pdf_col_value: "Value",
   pdf_disclaimer: "This report does not constitute tax or legal advice. All calculations are based solely on the data entered into Eigenfolio and may be incomplete or inaccurate. Please review all figures carefully and consult a qualified tax professional if needed.",
   pdf_generated_label: "Generated on",
-  pdf_title: "Eigenfolio: Tax Report",
+  pdf_title: "Eigenfolio: Report",
   reset_local_button_label: "Delete local data…",
   reset_local_cancel: "Cancel",
   reset_local_confirm_button: "Delete permanently",
@@ -159,13 +159,13 @@
   table_tx_title: "Transaction history",
   tips_line1: "Import your transactions via CSV or add them manually.",
   tips_line2: "Keep your data local if you want maximum privacy.",
-  tips_line3: "Use the PDF export to create documents for your tax report.",
+  tips_line3: "Use the PDF export to create a report for your documentation.",
   tips_line4_prefix: "Current holding period is",
   tips_line4_suffix: "days.",
   tips_title: "Tips",
   base_currency_title: "Base currency",
   base_currency_label: "Preferred currency",
-  base_currency_hint: "This currency is used as the primary fiat for totals and tax calculations (EUR or USD).",
+  base_currency_hint: "This currency is preferred for your tracking and documentation (EUR or USD).",
   tx_filter_asset_label: "Asset",
   tx_filter_asset_placeholder: "e.g. BTC, ETH, IOTA …",
   tx_filter_search_label: "Search",
@@ -198,7 +198,12 @@
   external_import_close_button: "Close",
   form_pair_currency: "Trading pair (quote asset)",
   form_pair_currency_placeholder: "e.g. EUR, USD, USDT, USDC, BTC …",
+  price_config_section_title: "Price fetching (CoinGecko)",
+  price_config_description: "Eigenfolio can fetch current and historical prices via the CoinGecko API. For large imports this may hit rate limits or CORS issues.",
+  price_config_enable_label: "Fetch prices via CoinGecko",
+  price_config_api_key_label: "CoinGecko API key",
+  price_config_api_key_hint: "Optional: using your own API key can reduce shared rate limiting. Requests are made directly from your browser.",
+  price_config_save_button: "Save price settings",
+  price_config_api_warning: "Price fetching recently encountered issues (e.g. CORS / rate limit). The app will keep retrying with pauses. You can disable CoinGecko here or provide your own API key.",
   footer_copyright_brand: "Eigenfolio",
-};
-
-  export default en;
+};export default en;

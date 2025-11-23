@@ -6,7 +6,7 @@ import { createPortfolioSnapshot, encryptSnapshotForCloud, decryptSnapshotFromCl
 import { CURRENT_CSV_SCHEMA_VERSION, CSV_SCHEMA_VERSION_COLUMN } from "./data/csvSchema";
 import { Transaction, HoldingsItem, HoldingsResponse, CsvImportResult, AppConfig, ExpiringHolding } from "./domain/types";
 import { DEFAULT_HOLDING_PERIOD_DAYS, DEFAULT_UPCOMING_WINDOW_DAYS } from "./domain/config";
-import { applyPricesToHoldings, getPriceCacheSnapshot, hydratePriceCache, fetchHistoricalPriceForSymbol } from "./data/priceService";
+import { applyPricesToHoldings, setCoingeckoApiKey, getPriceCacheSnapshot, loadPriceCacheSnapshot, fetchHistoricalPriceForSymbol, getPriceApiStatus } from "./data/priceService";
 import packageJson from "../package.json";
 
 const RESET_CONFIRMATION_WORD = "DELETE";
@@ -50,6 +50,13 @@ function isFiatAssetSymbol(symbol: string | null | undefined): boolean {
 
 function isTaxRelevant(tx: Transaction): boolean {
   const t = (tx.tx_type || "").trim().toUpperCase();
+  const asset = (tx.asset_symbol || "").trim().toUpperCase();
+
+  // Treat obvious fiat currencies as non-taxable holdings
+  if (asset === "EUR" || asset === "USD") {
+    return false;
+  }
+
   return t === "BUY" || t === "AIRDROP" || t === "STAKING_REWARD";
 }
 
@@ -77,7 +84,7 @@ const App: React.FC = () => {
     () => createPortfolioDataSource(auth.mode),
     [auth.mode]
   );
-  const [lang, setLang] = useState<Language>(() => {
+const [lang, setLang] = useState<Language>(() => {
     if (typeof window !== "undefined") {
       try {
         const stored = window.localStorage.getItem(LOCAL_STORAGE_LANG_KEY);
@@ -207,6 +214,8 @@ const [txFilterType, setTxFilterType] = useState<string>("");
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [expiring, setExpiring] = useState<ExpiringHolding[]>([]);
   const [holdingPeriodInput, setHoldingPeriodInput] = useState<string>("");
+  const [priceFetchEnabledInput, setPriceFetchEnabledInput] = useState<boolean>(true);
+  const [coingeckoApiKeyInput, setCoingeckoApiKeyInput] = useState<string>("");
 
   const [form, setForm] = useState({
     asset_symbol: "IOTA",
@@ -225,6 +234,8 @@ const [txFilterType, setTxFilterType] = useState<string>("");
   useEffect(() => {
     if (config) {
       setHoldingPeriodInput(String(config.holding_period_days));
+      setPriceFetchEnabledInput(config.price_fetch_enabled !== false);
+      setCoingeckoApiKeyInput(config.coingecko_api_key ?? "");
     }
   }, [config]);
 
@@ -274,6 +285,26 @@ const [txFilterType, setTxFilterType] = useState<string>("");
     setLoading(false);
   }
 };
+
+  useEffect(() => {
+    // Optimistically load local transactions and holdings from storage
+    // so that something is visible immediately while price/fiat enrichment
+    // is still running in the background.
+    if (auth.mode !== "local-only") {
+      return;
+    }
+    try {
+      const rawTxs = loadLocalTransactions();
+      setTransactions(rawTxs);
+      const holdingsResp = computeLocalHoldings(rawTxs);
+      setHoldings(holdingsResp.items ?? []);
+    } catch (err) {
+      console.error("Failed to optimistically load local data", err);
+    }
+    // We intentionally do not depend on functions here to avoid re-running
+    // this effect unnecessarily.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.mode]);
 
   useEffect(() => {
     fetchData();
@@ -492,6 +523,9 @@ const handleExportCsv = () => {
     "timestamp",
     "price_fiat",
     "fiat_currency",
+    "fiat_value",
+    "value_eur",
+    "value_usd",
     "source",
     "note",
     "tx_id",
@@ -507,6 +541,9 @@ const handleExportCsv = () => {
     tx.timestamp ?? "",
     tx.price_fiat != null ? String(tx.price_fiat) : "",
     tx.fiat_currency ?? "",
+    tx.fiat_value != null ? String(tx.fiat_value) : "",
+    tx.value_eur != null ? String(tx.value_eur) : "",
+    tx.value_usd != null ? String(tx.value_usd) : "",
     tx.source ?? "",
     tx.note ?? "",
     tx.tx_id ?? "",
@@ -561,6 +598,8 @@ const handleExportCsv = () => {
     upcoming_holding_window_days:
       config.upcoming_holding_window_days ?? DEFAULT_UPCOMING_WINDOW_DAYS,
     base_currency: config.base_currency ?? "EUR",
+    price_fetch_enabled: config.price_fetch_enabled !== false,
+    coingecko_api_key: config.coingecko_api_key ?? null,
   };
 
   setConfig(nextConfig);
@@ -571,6 +610,34 @@ const handleExportCsv = () => {
     setExpiring(expiringNext);
   }
 };
+
+
+  const handleSavePriceSettings = () => {
+    if (!config) {
+      return;
+    }
+
+    const nextConfig: AppConfig = {
+      holding_period_days:
+        config.holding_period_days ?? DEFAULT_HOLDING_PERIOD_DAYS,
+      upcoming_holding_window_days:
+        config.upcoming_holding_window_days ?? DEFAULT_UPCOMING_WINDOW_DAYS,
+      base_currency: config.base_currency ?? "EUR",
+      price_fetch_enabled: priceFetchEnabledInput,
+      coingecko_api_key:
+        coingeckoApiKeyInput.trim().length > 0
+          ? coingeckoApiKeyInput.trim()
+          : null,
+    };
+
+    setConfig(nextConfig);
+
+    if (auth.mode === "local-only") {
+      saveLocalAppConfig(nextConfig);
+      const expiringNext = computeLocalExpiring(transactions, nextConfig);
+      setExpiring(expiringNext);
+    }
+  };
 
 const handleResetHoldingConfigToDefault = () => {
   const nextConfig: AppConfig = {
@@ -578,6 +645,8 @@ const handleResetHoldingConfigToDefault = () => {
     upcoming_holding_window_days:
       config?.upcoming_holding_window_days ?? DEFAULT_UPCOMING_WINDOW_DAYS,
     base_currency: config?.base_currency ?? "EUR",
+    price_fetch_enabled: config?.price_fetch_enabled !== false,
+    coingecko_api_key: config?.coingecko_api_key ?? null,
   };
 
   setConfig(nextConfig);
@@ -588,6 +657,32 @@ const handleResetHoldingConfigToDefault = () => {
     setExpiring(expiringNext);
   }
 };
+
+  const handleTogglePriceFetchEnabled = (nextEnabled: boolean) => {
+    setPriceFetchEnabledInput(nextEnabled);
+
+    if (!config) {
+      return;
+    }
+
+    const nextConfig: AppConfig = {
+      holding_period_days:
+        config.holding_period_days ?? DEFAULT_HOLDING_PERIOD_DAYS,
+      upcoming_holding_window_days:
+        config.upcoming_holding_window_days ?? DEFAULT_UPCOMING_WINDOW_DAYS,
+      base_currency: config.base_currency ?? "EUR",
+      price_fetch_enabled: nextEnabled,
+      coingecko_api_key: config.coingecko_api_key ?? null,
+    };
+
+    setConfig(nextConfig);
+
+    if (auth.mode === "local-only") {
+      saveLocalAppConfig(nextConfig);
+      const expiringNext = computeLocalExpiring(transactions, nextConfig);
+      setExpiring(expiringNext);
+    }
+  };
 
   const handleExportPdf = async () => {
   try {
@@ -609,11 +704,15 @@ const handleReloadHoldingPrices = async () => {
   if (!holdings || holdings.length === 0) {
     return;
   }
+  if (!config || config.price_fetch_enabled === false) {
+    return;
+  }
   if (pricesRefreshing) {
     return;
   }
   setPricesRefreshing(true);
   try {
+    setCoingeckoApiKey(config.coingecko_api_key ?? null);
     const resp: HoldingsResponse = {
       items: holdings,
       portfolio_value_eur: null,
@@ -626,7 +725,6 @@ const handleReloadHoldingPrices = async () => {
     setHoldingsPortfolioEur(updated.portfolio_value_eur ?? null);
     setHoldingsPortfolioUsd(updated.portfolio_value_usd ?? null);
     setFxRateEurUsd(updated.fx_rate_eur_usd ?? null);
-    setFxRateUsdEur(updated.fx_rate_usd_eur ?? null);
   } catch (err) {
     console.error("Failed to reload holding prices", err);
   } finally {
@@ -1053,6 +1151,8 @@ const handleRestoreEncryptedBackup = async () => {
                   upcoming_holding_window_days:
                     config?.upcoming_holding_window_days ?? DEFAULT_UPCOMING_WINDOW_DAYS,
                   base_currency: value,
+                  price_fetch_enabled: config?.price_fetch_enabled !== false,
+                  coingecko_api_key: config?.coingecko_api_key ?? null,
                 };
 
                 setConfig(nextConfig);
@@ -1108,7 +1208,12 @@ const handleRestoreEncryptedBackup = async () => {
               </span>
             </div>
           </div>
-          {csvImporting && <p className="muted">{t(lang, "csv_running")}</p>}
+          {csvImporting && (
+            <>
+              <p className="muted">{t(lang, "csv_running")}</p>
+              <progress />
+            </>
+          )}
           {csvResult && (
             <div className="csv-result">
               <p className="muted">
@@ -1187,6 +1292,104 @@ const handleRestoreEncryptedBackup = async () => {
               disabled={!holdingPeriodInput.length || !config}
             >
               {t(lang, "holding_config_save_button")}
+            </button>
+          </div>
+        </div>
+
+        <div className="sidebar-section">
+          <h2>{t(lang, "price_config_section_title")}</h2>
+          <p className="muted">
+            {t(lang, "price_config_description")}
+          </p>
+          <div className="form-row" style={{ marginTop: "0.5rem" }}>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "0.5rem",
+              }}
+            >
+              <span>{t(lang, "price_config_enable_label")}</span>
+              <span
+                style={{
+                  position: "relative",
+                  display: "inline-block",
+                  width: "40px",
+                  height: "20px",
+                  borderRadius: "999px",
+                  backgroundColor: priceFetchEnabledInput ? "#22c55e" : "#cbd5e1",
+                  transition: "background-color 0.2s ease",
+                  cursor: "pointer",
+                }}
+                onClick={() => {
+                  handleTogglePriceFetchEnabled(!priceFetchEnabledInput);
+                }}
+              >
+                <span
+                  style={{
+                    position: "absolute",
+                    top: "2px",
+                    left: priceFetchEnabledInput ? "22px" : "2px",
+                    width: "16px",
+                    height: "16px",
+                    borderRadius: "999px",
+                    backgroundColor: "#ffffff",
+                    boxShadow: "0 1px 2px rgba(0, 0, 0, 0.25)",
+                    transition: "left 0.2s ease",
+                  }}
+                />
+                <input
+                  type="checkbox"
+                  checked={priceFetchEnabledInput}
+                  onChange={(e) => {
+                    handleTogglePriceFetchEnabled(e.target.checked);
+                  }}
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    opacity: 0,
+                    margin: 0,
+                    cursor: "pointer",
+                  }}
+                />
+              </span>
+            </label>
+          </div>
+          <div className="form-row" style={{ marginTop: "0.5rem" }}>
+            <label>{t(lang, "price_config_api_key_label")}</label>
+            <input
+              type="text"
+              value={coingeckoApiKeyInput}
+              onChange={(e) => {
+                setCoingeckoApiKeyInput(e.target.value);
+              }}
+              placeholder="CoinGecko API key (optional)"
+            />
+            <p className="muted" style={{ fontSize: "0.75rem", marginTop: "0.25rem" }}>
+              {t(lang, "price_config_api_key_hint")}
+            </p>
+            {config && config.price_fetch_enabled !== false && getPriceApiStatus().hasError && (
+              <p className="muted" style={{ fontSize: "0.75rem", marginTop: "0.25rem" }}>
+                {t(lang, "price_config_api_warning")}
+              </p>
+            )}
+          </div>
+          <div
+            style={{
+              marginTop: "0.5rem",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "0.5rem",
+            }}
+          >
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleSavePriceSettings}
+              disabled={!config}
+            >
+              {t(lang, "price_config_save_button")}
             </button>
           </div>
         </div>
@@ -1443,6 +1646,9 @@ const handleRestoreEncryptedBackup = async () => {
                   {t(lang, "external_import_open_button")}
                 </button>
               </div>
+            {loading && (
+              <p className="muted">{t(lang, "holdings_price_loading")}</p>
+            )}
             </div>
             {displayHoldings.length === 0 ? (
               <p className="muted">{t(lang, "holdings_empty")}</p>
@@ -1667,22 +1873,90 @@ const handleRestoreEncryptedBackup = async () => {
                       <td>{tx.asset_symbol}</td>
                       <td>{tx.tx_type}</td>
                       <td>{tx.amount}</td>
-                      <td>
-                        {tx.price_fiat != null
-                          ? `${tx.price_fiat.toLocaleString(currentLocale, {
-                              minimumFractionDigits: 0,
-                              maximumFractionDigits: 2,
-                            })} ${tx.fiat_currency}`
-                          : "-"}
+                                            <td>
+                        {(() => {
+                          const baseCurrency = config?.base_currency === "USD" ? "USD" : "EUR";
+                          const amount = typeof tx.amount === "number" ? tx.amount : 0;
+
+                          let totalValue: number | null = null;
+
+                          if (baseCurrency === "USD") {
+                            if (typeof tx.value_usd === "number" && Number.isFinite(tx.value_usd)) {
+                              totalValue = tx.value_usd;
+                            } else if (
+                              tx.fiat_currency === "USD" &&
+                              typeof tx.fiat_value === "number" &&
+                              Number.isFinite(tx.fiat_value)
+                            ) {
+                              totalValue = tx.fiat_value;
+                            }
+                          } else {
+                            if (typeof tx.value_eur === "number" && Number.isFinite(tx.value_eur)) {
+                              totalValue = tx.value_eur;
+                            } else if (
+                              tx.fiat_currency === "EUR" &&
+                              typeof tx.fiat_value === "number" &&
+                              Number.isFinite(tx.fiat_value)
+                            ) {
+                              totalValue = tx.fiat_value;
+                            }
+                          }
+
+                          if (totalValue == null) {
+                            return "-";
+                          }
+
+                          if (!Number.isFinite(amount) || amount === 0) {
+                            return "-";
+                          }
+
+                          const unitPrice = totalValue / amount;
+
+                          return `${unitPrice.toLocaleString(currentLocale, {
+                            minimumFractionDigits: 0,
+                            maximumFractionDigits: 2,
+                          })} ${baseCurrency}`;
+                        })()}
                       </td>
                       <td>
-                        {tx.fiat_value != null
-                          ? `${tx.fiat_value.toLocaleString(currentLocale, {
-                              minimumFractionDigits: 0,
-                              maximumFractionDigits: 2,
-                            })} ${tx.fiat_currency}`
-                          : "-"}
+                        {(() => {
+                          const baseCurrency = config?.base_currency === "USD" ? "USD" : "EUR";
+
+                          let totalValue: number | null = null;
+
+                          if (baseCurrency === "USD") {
+                            if (typeof tx.value_usd === "number" && Number.isFinite(tx.value_usd)) {
+                              totalValue = tx.value_usd;
+                            } else if (
+                              tx.fiat_currency === "USD" &&
+                              typeof tx.fiat_value === "number" &&
+                              Number.isFinite(tx.fiat_value)
+                            ) {
+                              totalValue = tx.fiat_value;
+                            }
+                          } else {
+                            if (typeof tx.value_eur === "number" && Number.isFinite(tx.value_eur)) {
+                              totalValue = tx.value_eur;
+                            } else if (
+                              tx.fiat_currency === "EUR" &&
+                              typeof tx.fiat_value === "number" &&
+                              Number.isFinite(tx.fiat_value)
+                            ) {
+                              totalValue = tx.fiat_value;
+                            }
+                          }
+
+                          if (totalValue == null) {
+                            return "-";
+                          }
+
+                          return `${totalValue.toLocaleString(currentLocale, {
+                            minimumFractionDigits: 0,
+                            maximumFractionDigits: 2,
+                          })} ${baseCurrency}`;
+                        })()}
                       </td>
+
                       <td>{tx.tx_id || "-"}</td>
                       <td>{tx.source || "-"}</td>
                       <td>
@@ -2142,7 +2416,10 @@ const handleRestoreEncryptedBackup = async () => {
             </div>
 
             {externalImporting && (
-              <p className="muted">{t(lang, "external_import_running")}</p>
+              <>
+                <p className="muted">{t(lang, "external_import_running")}</p>
+                <progress />
+              </>
             )}
 
             {externalImportResult && (

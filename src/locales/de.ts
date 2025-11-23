@@ -1,8 +1,8 @@
-  const de: Record<string, string> = {
+export const de: Record<string, string> = {
   action_delete: "L\u00f6schen",
   action_edit: "Bearbeiten",
-  action_export_pdf: "Steuer-PDF exportieren",
-  app_subtitle: "Self-hosted Krypto-Portfolio & Steuer-\u00dcbersicht",
+  action_export_pdf: "PDF-Report exportieren",
+  app_subtitle: "Self-hosted Krypto-Portfolio",
   app_title: "Eigenfolio",
   cloud_backup_error_decrypt_failed: "Das Backup konnte nicht entschl\u00fcsselt werden. Bitte \u00fcberpr\u00fcfe Passwort und Datei.",
   cloud_backup_error_failed: "Das verschl\u00fcsselte Backup konnte nicht erstellt werden.",
@@ -135,7 +135,7 @@
   pdf_col_value: "Wert",
   pdf_disclaimer: "Dieser Report stellt keine steuerliche oder rechtliche Beratung dar. Die Berechnungen basieren ausschließlich auf den in Eigenfolio erfassten Daten und können unvollständig oder fehlerhaft sein. Bitte prüfe alle Angaben sorgfältig und wende dich bei Bedarf an eine Steuerberaterin oder einen Steuerberater.",
   pdf_generated_label: "Erstellt am",
-  pdf_title: "Eigenfolio: Steuerreport",
+  pdf_title: "Eigenfolio: Report",
   reset_local_button_label: "Lokale Daten löschen …",
   reset_local_cancel: "Abbrechen",
   reset_local_confirm_button: "Endgültig löschen",
@@ -157,13 +157,13 @@
   table_tx_title: "Transaktionshistorie",
   tips_line1: "Importiere deine Transaktionen als CSV oder f\u00fcge sie manuell hinzu.",
   tips_line2: "Halte deine Daten lokal, wenn du maximale Privatsph\u00e4re m\u00f6chtest.",
-  tips_line3: "Nutze den PDF-Export, um Unterlagen f\u00fcr deine Steuererkl\u00e4rung zu erzeugen.",
+  tips_line3: "Nutze den PDF-Export, um einen Report für deine Unterlagen zu erzeugen.",
   tips_line4_prefix: "Aktuelle Haltefrist betr\u00e4gt",
   tips_line4_suffix: "Tage.",
   tips_title: "Tipps",
-  base_currency_title: "Steuerwährung",
+  base_currency_title: "Fiat-Währung",
   base_currency_label: "Bevorzugte Währung",
-  base_currency_hint: "Diese Währung wird für Summen und Steuerberechnungen bevorzugt verwendet (EUR oder USD).",
+  base_currency_hint: "Diese Währung wird für dein Tracking und Unterlagen bevorzugt verwendet (EUR oder USD).",
   tx_filter_asset_label: "Asset",
   tx_filter_asset_placeholder: "z.B. BTC, ETH, IOTA …",
   tx_filter_search_label: "Suche",
@@ -196,7 +196,12 @@
   external_import_close_button: "Schließen",
   form_pair_currency: "Handelspaar (Gegenasset)",
   form_pair_currency_placeholder: "z. B. EUR, USD, USDT, USDC, BTC …",
+  price_config_section_title: "Preisabfrage (CoinGecko)",
+  price_config_description: "Eigenfolio kann aktuelle und historische Kurse über die CoinGecko-API laden. Bei großen Importen kann dies zu Rate-Limits oder CORS-Fehlern führen.",
+  price_config_enable_label: "Preise über CoinGecko abrufen",
+  price_config_api_key_label: "CoinGecko API-Schlüssel",
+  price_config_api_key_hint: "Optional: Ein eigener API-Schlüssel kann helfen, gemeinsame Rate-Limits zu vermeiden. Die Anfragen werden direkt aus deinem Browser gestellt.",
+  price_config_save_button: "Preis-Einstellungen speichern",
+  price_config_api_warning: "Die Kursabfrage hatte zuletzt Probleme (z.B. CORS/Rate-Limit). Es wird mit Pausen weiter versucht. Du kannst CoinGecko hier deaktivieren oder einen eigenen API-Schlüssel hinterlegen.",
   footer_copyright_brand: "Eigenfolio",
-};
-
-  export default de;
+};export default de;

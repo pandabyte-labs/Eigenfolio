@@ -39,6 +39,11 @@ export type CsvImportResult = {
 export type AppConfig = {
   holding_period_days: number;
   upcoming_holding_window_days: number;
+  base_currency: "EUR" | "USD";
+  // Whether the app should query CoinGecko for prices from this browser.
+  price_fetch_enabled?: boolean;
+  // Optional CoinGecko API key used for price requests.
+  coingecko_api_key?: string | null;
 };
 
 export type ExpiringHolding = {
@@ -49,4 +54,11 @@ export type ExpiringHolding = {
   holding_period_end: string;
   days_remaining: number;
 };
+
+export type ImportProgress = {
+  kind: "local_csv" | "binance" | "bitpanda";
+  current: number;
+  total: number;
+};
+
 

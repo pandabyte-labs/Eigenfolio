@@ -1,6 +1,6 @@
 import jsPDF from "jspdf";
 import { API_BASE_URL, CONFIG_URL, fetchJson } from "./backendApi";
-import { applyPricesToHoldings } from "./priceService";
+import { applyPricesToHoldings, fetchHistoricalPriceForSymbol, setCoingeckoApiKey } from "./priceService";
 import type {
   AppConfig,
   HoldingsResponse,
@@ -272,8 +272,68 @@ class CloudDataSource implements PortfolioDataSource {
           priceFiat = Number.isFinite(parsedPrice) ? parsedPrice : null;
         }
 
-        const fiatValue =
+        const fiatValueFromPrice =
           priceFiat != null && Number.isFinite(priceFiat) ? priceFiat * amount : null;
+
+        let fiatValue: number | null = fiatValueFromPrice;
+        if (record["fiat_value"]) {
+          let raw = record["fiat_value"].trim().replace(/\s+/g, "");
+          if (raw.includes(",") && raw.includes(".")) {
+            const lastComma = raw.lastIndexOf(",");
+            const lastDot = raw.lastIndexOf(".");
+            if (lastComma > lastDot) {
+              raw = raw.replace(/\./g, "").replace(",", ".");
+            } else {
+              raw = raw.replace(/,/g, "");
+            }
+          } else if (raw.includes(",")) {
+            raw = raw.replace(",", ".");
+          }
+          const parsed = parseFloat(raw);
+          if (Number.isFinite(parsed)) {
+            fiatValue = parsed;
+          }
+        }
+
+        let valueEur: number | null = null;
+        if (record["value_eur"]) {
+          let raw = record["value_eur"].trim().replace(/\s+/g, "");
+          if (raw.includes(",") && raw.includes(".")) {
+            const lastComma = raw.lastIndexOf(",");
+            const lastDot = raw.lastIndexOf(".");
+            if (lastComma > lastDot) {
+              raw = raw.replace(/\./g, "").replace(",", ".");
+            } else {
+              raw = raw.replace(/,/g, "");
+            }
+          } else if (raw.includes(",")) {
+            raw = raw.replace(",", ".");
+          }
+          const parsed = parseFloat(raw);
+          if (Number.isFinite(parsed)) {
+            valueEur = parsed;
+          }
+        }
+
+        let valueUsd: number | null = null;
+        if (record["value_usd"]) {
+          let raw = record["value_usd"].trim().replace(/\s+/g, "");
+          if (raw.includes(",") && raw.includes(".")) {
+            const lastComma = raw.lastIndexOf(",");
+            const lastDot = raw.lastIndexOf(".");
+            if (lastComma > lastDot) {
+              raw = raw.replace(/\./g, "").replace(",", ".");
+            } else {
+              raw = raw.replace(/,/g, "");
+            }
+          } else if (raw.includes(",")) {
+            raw = raw.replace(",", ".");
+          }
+          const parsed = parseFloat(raw);
+          if (Number.isFinite(parsed)) {
+            valueUsd = parsed;
+          }
+        }
 
         const tx: Transaction = {
           id,
@@ -287,8 +347,8 @@ class CloudDataSource implements PortfolioDataSource {
           note: record["note"] || null,
           tx_id: record["tx_id"] || null,
           fiat_value: fiatValue,
-          value_eur: null,
-          value_usd: null,
+          value_eur: valueEur,
+          value_usd: valueUsd,
         };
 
         const key = buildTransactionDedupKey(tx);
@@ -346,6 +406,9 @@ function loadLocalConfig(): AppConfig {
       return {
         holding_period_days: DEFAULT_HOLDING_PERIOD_DAYS,
         upcoming_holding_window_days: DEFAULT_UPCOMING_WINDOW_DAYS,
+        base_currency: "EUR",
+        price_fetch_enabled: true,
+        coingecko_api_key: null,
       };
     }
 
@@ -362,15 +425,37 @@ function loadLocalConfig(): AppConfig {
         ? parsed.upcoming_holding_window_days
         : DEFAULT_UPCOMING_WINDOW_DAYS;
 
+    const baseCurrency =
+      typeof parsed.base_currency === "string" &&
+      (parsed.base_currency === "USD" || parsed.base_currency === "EUR")
+        ? (parsed.base_currency as "EUR" | "USD")
+        : "EUR";
+
+
+    const priceFetchEnabled =
+      typeof parsed.price_fetch_enabled === "boolean"
+        ? parsed.price_fetch_enabled
+        : true;
+
+    const coingeckoApiKey =
+      typeof parsed.coingecko_api_key === "string"
+        ? parsed.coingecko_api_key
+        : null;
     return {
       holding_period_days: holding,
       upcoming_holding_window_days: upcoming,
+      base_currency: baseCurrency,
+      price_fetch_enabled: priceFetchEnabled,
+      coingecko_api_key: coingeckoApiKey,
     };
   } catch (err) {
     console.warn("Failed to load local config", err);
     return {
       holding_period_days: DEFAULT_HOLDING_PERIOD_DAYS,
       upcoming_holding_window_days: DEFAULT_UPCOMING_WINDOW_DAYS,
+      base_currency: "EUR",
+      price_fetch_enabled: true,
+      coingecko_api_key: null,
     };
   }
 }
@@ -529,6 +614,13 @@ export function computeLocalExpiring(transactions: Transaction[], config: AppCon
 
   for (const tx of transactions) {
     const txType = (tx.tx_type || "").toUpperCase();
+    const asset = (tx.asset_symbol || "").toUpperCase();
+
+    // Skip obvious fiat assets; they should not create holding period entries
+    if (asset === "EUR" || asset === "USD") {
+      continue;
+    }
+
     if (!["BUY", "AIRDROP", "REWARD", "STAKING_REWARD"].includes(txType)) {
       continue;
     }
@@ -561,6 +653,76 @@ export function computeLocalExpiring(transactions: Transaction[], config: AppCon
   return results;
 }
 
+
+
+async function enrichTransactionsWithBaseFiat(
+  transactions: Transaction[],
+  baseCurrency: "EUR" | "USD",
+): Promise<Transaction[]> {
+  const enriched: Transaction[] = [];
+
+  for (const tx of transactions) {
+    const symbol = (tx.asset_symbol || "").toUpperCase();
+    const amount = typeof tx.amount === "number" ? tx.amount : 0;
+
+    // Skip entries that cannot be priced in a meaningful way.
+    if (!symbol || !Number.isFinite(amount) || amount === 0) {
+      enriched.push(tx);
+      continue;
+    }
+
+    // Skip obvious fiat asset symbols; they do not need historical price lookup.
+    if (symbol === "EUR" || symbol === "USD") {
+      enriched.push(tx);
+      continue;
+    }
+
+    // If we already have both EUR and USD values, keep the transaction as-is.
+    const hasBothValues =
+      typeof tx.value_eur === "number" &&
+      Number.isFinite(tx.value_eur) &&
+      typeof tx.value_usd === "number" &&
+      Number.isFinite(tx.value_usd);
+
+    if (hasBothValues) {
+      enriched.push(tx);
+      continue;
+    }
+
+    let hist: { eur: number | null; usd: number | null } | null = null;
+    try {
+      hist = await fetchHistoricalPriceForSymbol(symbol, baseCurrency, tx.timestamp);
+    } catch (err) {
+      // If the price could not be fetched, keep the original transaction unchanged.
+      enriched.push(tx);
+      continue;
+    }
+
+    if (!hist) {
+      enriched.push(tx);
+      continue;
+    }
+
+    const priceEur =
+      typeof hist.eur === "number" && Number.isFinite(hist.eur) ? hist.eur : null;
+    const priceUsd =
+      typeof hist.usd === "number" && Number.isFinite(hist.usd) ? hist.usd : null;
+
+    const valueEur =
+      priceEur != null ? priceEur * amount : tx.value_eur ?? null;
+    const valueUsd =
+      priceUsd != null ? priceUsd * amount : tx.value_usd ?? null;
+
+    enriched.push({
+      ...tx,
+      value_eur: valueEur,
+      value_usd: valueUsd,
+    });
+  }
+
+  return enriched;
+}
+
 /**
  * Local-only implementation using browser storage.
  *
@@ -572,24 +734,39 @@ export function computeLocalExpiring(transactions: Transaction[], config: AppCon
  */
 class LocalDataSource implements PortfolioDataSource {
   async loadInitialData() {
-    const txs = loadLocalTransactions();
-
     const config: AppConfig = loadLocalConfig();
+    setCoingeckoApiKey(config.coingecko_api_key ?? null);
+    const rawTxs = loadLocalTransactions();
 
-    let holdings = computeLocalHoldings(txs);
+    const baseCurrency: "EUR" | "USD" =
+      config.base_currency === "USD" ? "USD" : "EUR";
 
-    try {
-      holdings = await applyPricesToHoldings(holdings);
-    } catch (err) {
-      console.warn("Failed to enrich holdings with prices", err);
+    let transactions = rawTxs;
+
+    if (config.price_fetch_enabled !== false) {
+      try {
+        transactions = await enrichTransactionsWithBaseFiat(rawTxs, baseCurrency);
+      } catch (err) {
+        console.warn("Failed to enrich transactions with fiat values", err);
+      }
     }
 
-    const expiring = computeLocalExpiring(txs, config);
+    let holdings = computeLocalHoldings(transactions);
+
+    if (config.price_fetch_enabled !== false) {
+      try {
+        holdings = await applyPricesToHoldings(holdings);
+      } catch (err) {
+        console.warn("Failed to enrich holdings with prices", err);
+      }
+    }
+
+    const expiring = computeLocalExpiring(transactions, config);
 
     return {
       config,
       holdings,
-      transactions: txs,
+      transactions,
       expiring,
     };
   }
@@ -798,8 +975,68 @@ class LocalDataSource implements PortfolioDataSource {
           priceFiat = Number.isFinite(parsedPrice) ? parsedPrice : null;
         }
 
-        const fiatValue =
+        const fiatValueFromPrice =
           priceFiat != null && Number.isFinite(priceFiat) ? priceFiat * amount : null;
+
+        let fiatValue: number | null = fiatValueFromPrice;
+        if (record["fiat_value"]) {
+          let raw = record["fiat_value"].trim().replace(/\s+/g, "");
+          if (raw.includes(",") && raw.includes(".")) {
+            const lastComma = raw.lastIndexOf(",");
+            const lastDot = raw.lastIndexOf(".");
+            if (lastComma > lastDot) {
+              raw = raw.replace(/\./g, "").replace(",", ".");
+            } else {
+              raw = raw.replace(/,/g, "");
+            }
+          } else if (raw.includes(",")) {
+            raw = raw.replace(",", ".");
+          }
+          const parsed = parseFloat(raw);
+          if (Number.isFinite(parsed)) {
+            fiatValue = parsed;
+          }
+        }
+
+        let valueEur: number | null = null;
+        if (record["value_eur"]) {
+          let raw = record["value_eur"].trim().replace(/\s+/g, "");
+          if (raw.includes(",") && raw.includes(".")) {
+            const lastComma = raw.lastIndexOf(",");
+            const lastDot = raw.lastIndexOf(".");
+            if (lastComma > lastDot) {
+              raw = raw.replace(/\./g, "").replace(",", ".");
+            } else {
+              raw = raw.replace(/,/g, "");
+            }
+          } else if (raw.includes(",")) {
+            raw = raw.replace(",", ".");
+          }
+          const parsed = parseFloat(raw);
+          if (Number.isFinite(parsed)) {
+            valueEur = parsed;
+          }
+        }
+
+        let valueUsd: number | null = null;
+        if (record["value_usd"]) {
+          let raw = record["value_usd"].trim().replace(/\s+/g, "");
+          if (raw.includes(",") && raw.includes(".")) {
+            const lastComma = raw.lastIndexOf(",");
+            const lastDot = raw.lastIndexOf(".");
+            if (lastComma > lastDot) {
+              raw = raw.replace(/\./g, "").replace(",", ".");
+            } else {
+              raw = raw.replace(/,/g, "");
+            }
+          } else if (raw.includes(",")) {
+            raw = raw.replace(",", ".");
+          }
+          const parsed = parseFloat(raw);
+          if (Number.isFinite(parsed)) {
+            valueUsd = parsed;
+          }
+        }
 
         const tx: Transaction = {
           id,
@@ -813,8 +1050,8 @@ class LocalDataSource implements PortfolioDataSource {
           note: record["note"] || null,
           tx_id: record["tx_id"] || null,
           fiat_value: fiatValue,
-          value_eur: null,
-          value_usd: null,
+          value_eur: valueEur,
+          value_usd: valueUsd,
         };
 
         const key = buildTransactionDedupKey(tx);
@@ -1284,6 +1521,7 @@ class LocalDataSource implements PortfolioDataSource {
 
   async exportPdf(lang: Language, transactions?: Transaction[]): Promise<Blob> {
     const txs = transactions ?? loadLocalTransactions();
+    const config = loadLocalConfig();
 
     // Use landscape orientation for better column layout
     const doc = new jsPDF({ orientation: "landscape" });
@@ -1369,16 +1607,42 @@ class LocalDataSource implements PortfolioDataSource {
         : "";
       const amountStr =
         tx.amount != null ? formatNumber(tx.amount) : "";
+
+      const baseCurrency = config.base_currency === "USD" ? "USD" : "EUR";
+
+      let totalValue: number | null = null;
+      if (baseCurrency === "USD") {
+        if (typeof tx.value_usd === "number" && Number.isFinite(tx.value_usd)) {
+          totalValue = tx.value_usd;
+        } else if (
+          tx.fiat_currency === "USD" &&
+          typeof tx.fiat_value === "number" &&
+          Number.isFinite(tx.fiat_value)
+        ) {
+          totalValue = tx.fiat_value;
+        }
+      } else {
+        if (typeof tx.value_eur === "number" && Number.isFinite(tx.value_eur)) {
+          totalValue = tx.value_eur;
+        } else if (
+          tx.fiat_currency === "EUR" &&
+          typeof tx.fiat_value === "number" &&
+          Number.isFinite(tx.fiat_value)
+        ) {
+          totalValue = tx.fiat_value;
+        }
+      }
+
+      let pricePerUnit: number | null = null;
+      if (totalValue != null && tx.amount != null && Number.isFinite(tx.amount) && tx.amount !== 0) {
+        pricePerUnit = totalValue / tx.amount;
+      }
+
       const priceStr =
-        tx.price_fiat != null ? formatNumber(tx.price_fiat) : "";
-      const value =
-        tx.fiat_value != null
-          ? tx.fiat_value
-          : tx.price_fiat != null
-          ? tx.price_fiat * tx.amount
-          : null;
-      const valueStr = value != null ? formatNumber(value) : "";
-      const curStr = tx.fiat_currency ?? "";
+        pricePerUnit != null ? formatNumber(pricePerUnit) : "";
+      const valueStr =
+        totalValue != null ? formatNumber(totalValue) : "";
+      const curStr = baseCurrency;
       const sourceStr = tx.source ?? "";
       const txIdStr = tx.tx_id ?? "";
       const noteStr = tx.note ?? "";
