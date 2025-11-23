@@ -1,7 +1,7 @@
 import type { EncryptedPayload } from "../crypto/cryptoService";
 
 /**
- * Direction of a sync operation with the Eigenfolio Cloud.
+ * Direction of a sync operation with the Trakky Cloud.
  *
  * - "push": upload the local encrypted snapshot to the cloud.
  * - "pull": download the latest encrypted snapshot from the cloud.
@@ -9,7 +9,7 @@ import type { EncryptedPayload } from "../crypto/cryptoService";
 export type CloudSyncDirection = "push" | "pull";
 
 /**
- * Minimal client interface for talking to the Eigenfolio Cloud backend.
+ * Minimal client interface for talking to the Trakky Cloud backend.
  *
  * The backend is expected to store opaque, end-to-end encrypted blobs
  * only. It must never see plaintext portfolio data. This interface is
@@ -18,7 +18,7 @@ export type CloudSyncDirection = "push" | "pull";
  */
 export interface CloudClient {
   /**
-   * Upload the given encrypted snapshot to the Eigenfolio Cloud.
+   * Upload the given encrypted snapshot to the Trakky Cloud.
    *
    * Implementations MUST:
    * - use TLS (HTTPS) for transport;
@@ -29,7 +29,7 @@ export interface CloudClient {
 
   /**
    * Download the latest encrypted snapshot for the current user from the
-   * Eigenfolio Cloud, if any.
+   * Trakky Cloud, if any.
    *
    * Implementations MUST:
    * - return `null` if no snapshot exists yet;
@@ -65,7 +65,7 @@ class NoopCloudClient implements CloudClient {
  *
  * The standalone frontend returns a no-op implementation. A future
  * cloud-aware build can replace this with a real client that talks
- * to the Eigenfolio Cloud backend via HTTPS.
+ * to the Trakky Cloud backend via HTTPS.
  */
 export function createCloudClient(): CloudClient {
   return new NoopCloudClient();

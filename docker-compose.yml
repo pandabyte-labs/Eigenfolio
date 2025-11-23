@@ -1,13 +1,13 @@
 services:
-  eigenfolio:
-    image: pandabytelabs/eigenfolio:latest
-    container_name: eigenfolio
+  trakky:
+    image: pandabytelabs/trakky:latest
+    container_name: trakky
     restart: unless-stopped
     ports:
       - "5173:5173"
     environment:
       DISABLE_CLOUD_CONNECT: "false"
-      EIGENFOLIO_ALLOWED_HOSTS: "all" # Default: allow all hosts (recommended to override in production)
+      TRAKKY_ALLOWED_HOSTS: "all" # Default: allow all hosts (recommended to override in production)
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:5173 || exit 1"]
       interval: 30s

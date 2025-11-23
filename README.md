@@ -1,11 +1,11 @@
-# Eigenfolio
+# Trakky
 
 > Self-hosted crypto portfolio & tax overview.
 
-Eigenfolio is a privacy-friendly, self-hostable web app to track your crypto portfolio and generate a basic tax overview.
+Trakky is a privacy-friendly, self-hostable web app to track your crypto portfolio and generate a basic tax overview.
 The UI runs entirely in your browser, data is stored locally, and encrypted backups can be created for safekeeping.
 
-> Cloud sync / "Eigenfolio Cloud" integration is optional. In the standalone build described here, no portfolio data is sent to any third-party service unless you explicitly configure it.
+> Cloud sync / "Trakky Cloud" integration is optional. In the standalone build described here, no portfolio data is sent to any third-party service unless you explicitly configure it.
 
 ---
 
@@ -14,7 +14,7 @@ The UI runs entirely in your browser, data is stored locally, and encrypted back
 - Track crypto holdings and transactions
 - Portfolio and gain/loss overview
 - Export a tax PDF
-- CSV import & export (Eigenfolio-specific schema)
+- CSV import & export (Trakky-specific schema)
 - End-to-end encrypted backups
 - Local-first: everything runs in the browser, no external API required for basic usage
 - English and German translations
@@ -23,7 +23,7 @@ The UI runs entirely in your browser, data is stored locally, and encrypted back
 
 ## Project status
 
-Eigenfolio is currently in an early version (`0.0.1`).
+Trakky is currently in an early version (`0.0.1`).
 APIs, data schema and UI are subject to change between releases.
 
 ---
@@ -32,10 +32,10 @@ APIs, data schema and UI are subject to change between releases.
 
 Docker images are published to Docker Hub:
 
-- `pandabytelabs/eigenfolio:latest` – latest stable release from `main`
-- `pandabytelabs/eigenfolio:stable` – alias for the latest stable release
-- `pandabytelabs/eigenfolio:testing` – pre-release builds from `develop`
-- `pandabytelabs/eigenfolio:<version>` – versioned images (e.g. `0.0.1`)
+- `pandabytelabs/trakky:latest` – latest stable release from `main`
+- `pandabytelabs/trakky:stable` – alias for the latest stable release
+- `pandabytelabs/trakky:testing` – pre-release builds from `develop`
+- `pandabytelabs/trakky:<version>` – versioned images (e.g. `0.0.1`)
 
 Tags:
 
@@ -49,7 +49,7 @@ Tags:
 ### Run the stable image
 
 ```bash
-docker run --rm   -p 5173:5173   --name eigenfolio   pandabytelabs/eigenfolio:latest
+docker run --rm   -p 5173:5173   --name trakky   pandabytelabs/trakky:latest
 ```
 
 Now open:
@@ -61,7 +61,7 @@ http://localhost:5173
 ### Run the testing (pre-release) image
 
 ```bash
-docker run --rm   -p 5173:5173   --name eigenfolio-testing   pandabytelabs/eigenfolio:testing
+docker run --rm   -p 5173:5173   --name trakky-testing   pandabytelabs/trakky:testing
 ```
 
 ### Environment variables
@@ -75,14 +75,14 @@ The app supports configuration via environment variables. One example is:
 Example with cloud connect disabled:
 
 ```bash
-docker run --rm   -p 5173:5173   -e DISABLE_CLOUD_CONNECT=true   --name eigenfolio   pandabytelabs/eigenfolio:latest
+docker run --rm   -p 5173:5173   -e DISABLE_CLOUD_CONNECT=true   --name trakky   pandabytelabs/trakky:latest
 ```
 
 ---
 
 ## Self-hosting without Docker
 
-You can also build and host Eigenfolio yourself, e.g. on your own server or behind a reverse proxy.
+You can also build and host Trakky yourself, e.g. on your own server or behind a reverse proxy.
 
 ### 1. Install dependencies
 
@@ -138,10 +138,10 @@ If you prefer to build your own image instead of using the public Docker Hub ima
 
 ```bash
 # Build the image
-docker build -t eigenfolio:local .
+docker build -t trakky:local .
 
 # Run it
-docker run --rm   -p 5173:5173   --name eigenfolio-local   eigenfolio:local
+docker run --rm   -p 5173:5173   --name trakky-local   trakky:local
 ```
 
 You can then tag & push it to your own registry if you like.
@@ -173,14 +173,14 @@ Please respect the license terms below.
 
 ## License
 
-This project is distributed under the **Eigenfolio Non-Commercial License** (see `LICENSE`).
+This project is distributed under the **Trakky Non-Commercial License** (see `LICENSE`).
 
 In short:
 
-- You may use Eigenfolio for personal, non-commercial purposes.
+- You may use Trakky for personal, non-commercial purposes.
 - You may modify the code for your private use.
 - You must keep the original copyright notices.
-- You may not use Eigenfolio or derivatives for commercial purposes (including paid services or SaaS).
-- You may not sell or re-license Eigenfolio.
+- You may not use Trakky or derivatives for commercial purposes (including paid services or SaaS).
+- You may not sell or re-license Trakky.
 
 The full license text can be found in the `LICENSE` file in this repository.

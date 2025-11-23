@@ -1,4 +1,4 @@
-/* Shared domain types for Eigenfolio frontend. */
+/* Shared domain types for Trakky frontend. */
 
 export type Transaction = {
   id: number;

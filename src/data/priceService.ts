@@ -35,7 +35,7 @@ type PriceCacheEntry = {
   fetched_at: number;
 };
 
-const PRICE_CACHE_KEY = "eigenfolio:price-cache-v1";
+const PRICE_CACHE_KEY = "trakky:price-cache-v1";
 /**
  * How long a cached price is considered "fresh" before we try to refresh it
  * from the price API again. We intentionally pick a relatively long interval
@@ -295,7 +295,7 @@ type HistoricalPriceCacheEntry = PriceCacheEntry;
 
 type HistoricalPriceCache = Record<string, HistoricalPriceCacheEntry>;
 
-const HISTORICAL_PRICE_CACHE_KEY = "eigenfolio:price-cache-historical-v1";
+const HISTORICAL_PRICE_CACHE_KEY = "trakky:price-cache-historical-v1";
 
 let historicalPriceCache: HistoricalPriceCache | null = null;
 
@@ -470,7 +470,7 @@ const upper = symbol.toUpperCase();
  * Hydrate the price cache from a previously stored snapshot.
  *
  * This is used when restoring from an encrypted backup or when loading data
- * that was synced from the Eigenfolio Cloud. It allows the frontend to
+ * that was synced from the Trakky Cloud. It allows the frontend to
  * reuse historical token prices without additional API requests.
  */
 export function hydratePriceCache(snapshot: AssetPriceCache): void {

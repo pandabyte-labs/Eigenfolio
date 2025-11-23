@@ -1,5 +1,5 @@
 /**
- * Shared configuration defaults for Eigenfolio frontend.
+ * Shared configuration defaults for Trakky frontend.
  *
  * These values are used when no backend-provided config is available,
  * e.g. in local-only mode.

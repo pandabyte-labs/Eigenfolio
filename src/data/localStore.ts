@@ -1,13 +1,13 @@
 /**
- * Client-side data mode selection for Eigenfolio.
+ * Client-side data mode selection for Trakky.
  *
  * This module is responsible for deciding whether the app should operate in
- * local-only mode (no cloud) or use the Eigenfolio Cloud service. The default is now local-only mode to emphasize privacy
+ * local-only mode (no cloud) or use the Trakky Cloud service. The default is now local-only mode to emphasize privacy
  * and standalone usage; cloud sync can be enabled via login.
  */
 export type DataSourceMode = "cloud" | "local-only";
 
-const STORAGE_KEY = "eigenfolio:data-source-mode";
+const STORAGE_KEY = "trakky:data-source-mode";
 
 export function getPreferredMode(): DataSourceMode {
   try {

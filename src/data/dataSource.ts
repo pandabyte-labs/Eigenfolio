@@ -60,7 +60,7 @@ function parseCsvLine(line: string): string[] {
  * Abstraction layer for portfolio data access.
  *
  * This allows us to:
- * - use a backend-based implementation (Eigenfolio backend / cloud),
+ * - use a backend-based implementation (Trakky backend / cloud),
  * - and a purely local implementation (local-only mode),
  *   without changing the UI components.
  */
@@ -105,7 +105,7 @@ export interface PortfolioDataSource {
 }
 
 /**
- * Cloud-based implementation using the existing Eigenfolio API.
+ * Cloud-based implementation using the existing Trakky API.
  */
 class CloudDataSource implements PortfolioDataSource {
   async loadInitialData() {
@@ -394,10 +394,10 @@ class CloudDataSource implements PortfolioDataSource {
 /**
  * Helpers for the local-only implementation.
  */
-const LS_TRANSACTIONS_KEY = "eigenfolio:transactions";
-const LS_NEXT_ID_KEY = "eigenfolio:next-tx-id";
+const LS_TRANSACTIONS_KEY = "trakky:transactions";
+const LS_NEXT_ID_KEY = "trakky:next-tx-id";
 
-const LS_CONFIG_KEY = "eigenfolio:app-config";
+const LS_CONFIG_KEY = "trakky:app-config";
 
 function loadLocalConfig(): AppConfig {
   try {
