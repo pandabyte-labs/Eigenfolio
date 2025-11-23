@@ -476,7 +476,7 @@ export function saveLocalAppConfig(config: AppConfig): void {
   saveLocalConfig(config);
 }
 
-function loadLocalTransactions(): Transaction[] {
+export function loadLocalTransactions(): Transaction[] {
   try {
     const raw = window.localStorage.getItem(LS_TRANSACTIONS_KEY);
     if (!raw) return [];
