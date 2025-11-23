@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import {createPortfolioDataSource, type PortfolioDataSource, computeLocalHoldings, computeLocalExpiring, overwriteLocalTransactions, saveLocalAppConfig} from "./data/dataSource";
+import { createPortfolioDataSource, type PortfolioDataSource, computeLocalHoldings, computeLocalExpiring, loadLocalTransactions, saveLocalAppConfig } from "./data/dataSource";
 import { useAuth } from "./auth/AuthContext";
 import { t, Language, getDefaultLanguage } from "./i18n";
 import { createPortfolioSnapshot, encryptSnapshotForCloud, decryptSnapshotFromCloud } from "./data/cloudSync";
@@ -109,9 +109,9 @@ const [lang, setLang] = useState<Language>(() => {
   const displayHoldings = holdings.filter((h) => !isFiatAssetSymbol(h.asset_symbol));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-const [txFilterYear, setTxFilterYear] = useState<string>("");
-const [txFilterAsset, setTxFilterAsset] = useState<string>("");
-const [txFilterType, setTxFilterType] = useState<string>("");
+  const [txFilterYear, setTxFilterYear] = useState<string>("");
+  const [txFilterAsset, setTxFilterAsset] = useState<string>("");
+  const [txFilterType, setTxFilterType] = useState<string>("");
   const [txSearch, setTxSearch] = useState<string>("");
   const [txPage, setTxPage] = useState(1);
   const [txPageSize, setTxPageSize] = useState(25);
@@ -184,12 +184,9 @@ const [txFilterType, setTxFilterType] = useState<string>("");
   );
 
   const [csvImporting, setCsvImporting] = useState(false);
-
-  const [externalImportSource, setExternalImportSource] =
-    useState<string>("binance_trade_xlsx");
+  const [externalImportSource, setExternalImportSource] = useState<string>("binance_trade_xlsx");
   const [externalImporting, setExternalImporting] = useState(false);
-  const [externalImportResult, setExternalImportResult] =
-    useState<CsvImportResult | null>(null);
+  const [externalImportResult, setExternalImportResult] = useState<CsvImportResult | null>(null);
   const [externalFileName, setExternalFileName] = useState<string | null>(null);
   const [showExternalImport, setShowExternalImport] = useState(false);
   const [showTransactionForm, setShowTransactionForm] = useState(false);
