@@ -40,6 +40,14 @@ function timestampToLocalInputValue(timestamp: string): string {
   return "";
 }
 
+const FIAT_ASSET_SYMBOLS = new Set(["EUR", "USD", "CHF", "GBP"]);
+
+function isFiatAssetSymbol(symbol: string | null | undefined): boolean {
+  if (!symbol) return false;
+  return FIAT_ASSET_SYMBOLS.has(symbol.toUpperCase());
+}
+
+
 function isTaxRelevant(tx: Transaction): boolean {
   const t = (tx.tx_type || "").trim().toUpperCase();
   return t === "BUY" || t === "AIRDROP" || t === "STAKING_REWARD";
@@ -91,6 +99,7 @@ const App: React.FC = () => {
   );
   const [fxRateEurUsd, setFxRateEurUsd] = useState<number | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const displayHoldings = holdings.filter((h) => !isFiatAssetSymbol(h.asset_symbol));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 const [txFilterYear, setTxFilterYear] = useState<string>("");
@@ -168,7 +177,17 @@ const [txFilterType, setTxFilterType] = useState<string>("");
   );
 
   const [csvImporting, setCsvImporting] = useState(false);
-    useEffect(() => {
+
+  const [externalImportSource, setExternalImportSource] =
+    useState<string>("binance_trade_xlsx");
+  const [externalImporting, setExternalImporting] = useState(false);
+  const [externalImportResult, setExternalImportResult] =
+    useState<CsvImportResult | null>(null);
+  const [externalFileName, setExternalFileName] = useState<string | null>(null);
+  const [showExternalImport, setShowExternalImport] = useState(false);
+  const [showTransactionForm, setShowTransactionForm] = useState(false);
+
+  useEffect(() => {
     try {
       if (typeof window !== "undefined") {
         window.localStorage.setItem(LOCAL_STORAGE_LANG_KEY, lang);
@@ -178,7 +197,7 @@ const [txFilterType, setTxFilterType] = useState<string>("");
     }
   }, [lang]);
 
-const [csvResult, setCsvResult] = useState<CsvImportResult | null>(null);
+  const [csvResult, setCsvResult] = useState<CsvImportResult | null>(null);
   const [csvFileName, setCsvFileName] = useState<string | null>(null);
   const [showResetConfirmation, setShowResetConfirmation] = useState(false);
   const [resetConfirmationInput, setResetConfirmationInput] = useState("");
@@ -366,6 +385,7 @@ const payload = {
 
     resetForm();
     await fetchData();
+    setShowTransactionForm(false);
   } catch (err) {
     console.error(err);
     setError(t(lang, "error_save_tx"));
@@ -408,6 +428,58 @@ const payload = {
   }
 };
 
+  const handleExternalFileChange = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setExternalFileName(file.name);
+    setExternalImportResult(null);
+    setError(null);
+    setExternalImporting(true);
+
+    try {
+      if (externalImportSource === "binance_trade_xlsx") {
+        const importer = dataSource.importBinanceSpotXlsx?.bind(dataSource);
+        if (!importer) {
+          setExternalImportResult({
+            imported: 0,
+            errors: [t(lang, "external_import_not_supported")],
+          });
+        } else {
+          const json = await importer(lang, file);
+          setExternalImportResult(json);
+          await fetchData();
+        }
+      } else if (externalImportSource === "bitpanda_csv") {
+        const importer = dataSource.importBitpandaCsv?.bind(dataSource);
+        if (!importer) {
+          setExternalImportResult({
+            imported: 0,
+            errors: [t(lang, "external_import_not_supported")],
+          });
+        } else {
+          const json = await importer(lang, file);
+          setExternalImportResult(json);
+          await fetchData();
+        }
+      } else {
+        setExternalImportResult({
+          imported: 0,
+          errors: [t(lang, "external_import_not_supported")],
+        });
+      }
+    } catch (err) {
+      console.error(err);
+      setError(t(lang, "error_external_import"));
+    } finally {
+      setExternalImporting(false);
+      e.target.value = "";
+    }
+  };
+
+
 const handleExportCsv = () => {
   if (!transactions || transactions.length === 0) {
     return;
@@ -425,6 +497,7 @@ const handleExportCsv = () => {
     "tx_id",
     CSV_SCHEMA_VERSION_COLUMN,
     "holding_period_days",
+    "base_currency",
   ];
 
   const rows = transactions.map((tx) => [
@@ -439,6 +512,7 @@ const handleExportCsv = () => {
     tx.tx_id ?? "",
     String(CURRENT_CSV_SCHEMA_VERSION),
     String(config?.holding_period_days ?? DEFAULT_HOLDING_PERIOD_DAYS),
+    config?.base_currency ?? "EUR",
   ]);
 
   const escapeCell = (value: string) => `"${value.replace(/"/g, '""')}"`;
@@ -460,7 +534,13 @@ const handleExportCsv = () => {
   a.remove();
   window.URL.revokeObjectURL(url);
 };
-const handleSaveHoldingConfig = () => {
+  const handleCloseExternalImport = () => {
+    setShowExternalImport(false);
+    setExternalImportResult(null);
+    setExternalFileName(null);
+  };
+
+  const handleSaveHoldingConfig = () => {
   if (!config) {
     return;
   }
@@ -480,6 +560,7 @@ const handleSaveHoldingConfig = () => {
     holding_period_days: parsed,
     upcoming_holding_window_days:
       config.upcoming_holding_window_days ?? DEFAULT_UPCOMING_WINDOW_DAYS,
+    base_currency: config.base_currency ?? "EUR",
   };
 
   setConfig(nextConfig);
@@ -496,6 +577,7 @@ const handleResetHoldingConfigToDefault = () => {
     holding_period_days: DEFAULT_HOLDING_PERIOD_DAYS,
     upcoming_holding_window_days:
       config?.upcoming_holding_window_days ?? DEFAULT_UPCOMING_WINDOW_DAYS,
+    base_currency: config?.base_currency ?? "EUR",
   };
 
   setConfig(nextConfig);
@@ -638,6 +720,11 @@ const handleRestoreEncryptedBackup = async () => {
             rawConfig.upcoming_holding_window_days > 0
               ? rawConfig.upcoming_holding_window_days
               : DEFAULT_UPCOMING_WINDOW_DAYS,
+          base_currency:
+            typeof rawConfig.base_currency === "string" &&
+            (rawConfig.base_currency === "EUR" || rawConfig.base_currency === "USD")
+              ? rawConfig.base_currency
+              : "EUR",
         };
 
         const normalized: Transaction[] = snapshot.transactions
@@ -803,6 +890,11 @@ const handleRestoreEncryptedBackup = async () => {
           rawConfig.upcoming_holding_window_days > 0
             ? rawConfig.upcoming_holding_window_days
             : DEFAULT_UPCOMING_WINDOW_DAYS,
+        base_currency:
+          typeof rawConfig.base_currency === "string" &&
+          (rawConfig.base_currency === "EUR" || rawConfig.base_currency === "USD")
+            ? rawConfig.base_currency
+            : "EUR",
       };
 
       const normalized: Transaction[] = snapshot.transactions
@@ -948,16 +1040,46 @@ const handleRestoreEncryptedBackup = async () => {
         </div>
 
         <div className="sidebar-section">
-          <h2>{t(lang, "tips_title")}</h2>
-          <ul>
-            <li>{t(lang, "tips_line1")}</li>
-            <li>{t(lang, "tips_line2")}</li>
-            <li>{t(lang, "tips_line3")}</li>
-            <li>
-              {t(lang, "tips_line4_prefix")} <b>{holdingDays}</b>{" "}
-              {t(lang, "tips_line4_suffix")}{" "}</li>
-          </ul>
+          <h2>{t(lang, "base_currency_title")}</h2>
+          <div className="form-row">
+            <label>{t(lang, "base_currency_label")}</label>
+            <select
+              value={config?.base_currency ?? "EUR"}
+              onChange={(e) => {
+                const value = e.target.value === "USD" ? "USD" : "EUR";
+                const nextConfig: AppConfig = {
+                  holding_period_days:
+                    config?.holding_period_days ?? DEFAULT_HOLDING_PERIOD_DAYS,
+                  upcoming_holding_window_days:
+                    config?.upcoming_holding_window_days ?? DEFAULT_UPCOMING_WINDOW_DAYS,
+                  base_currency: value,
+                };
+
+                setConfig(nextConfig);
+
+                if (auth.mode === "local-only") {
+                  saveLocalAppConfig(nextConfig);
+                  const expiringNext = computeLocalExpiring(transactions, nextConfig);
+                  setExpiring(expiringNext);
+                }
+              }}
+            >
+              <option value="EUR">EUR</option>
+              <option value="USD">USD</option>
+            </select>
+            <p className="muted">{t(lang, "base_currency_hint")}</p>
+          </div>
         </div>
+
+        <div className="sidebar-section">
+          <h2>{t(lang, "disclaimer_title")}</h2>
+          <p className="muted">
+            {t(lang, "disclaimer_line1")}
+            <br />
+            {t(lang, "disclaimer_line2")}
+          </p>
+        </div>
+
 
         <div className="sidebar-section">
           <h2>{t(lang, "csv_title")}</h2>
@@ -990,7 +1112,7 @@ const handleRestoreEncryptedBackup = async () => {
           {csvResult && (
             <div className="csv-result">
               <p className="muted">
-                {t(lang, "csv_result_prefix")}: {csvResult.imported}
+                {t(lang, "csv_result_prefix")} {csvResult.imported}
               </p>
               {csvResult.errors && csvResult.errors.length > 0 && (
                 <div className="csv-errors">
@@ -1302,277 +1424,147 @@ const handleRestoreEncryptedBackup = async () => {
           </div>
         </header>
 
-        <section className="cards">
-          <div className="card">
-            <h3>{t(lang, "holdings_title")}</h3>
-            {holdings.length === 0 ? (
+        <section className="card">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}>
+              <h3 style={{ margin: 0 }}>{t(lang, "holdings_title")}</h3>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => setShowTransactionForm(true)}
+                >
+                  {t(lang, "tx_new_open_button")}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setShowExternalImport(true)}
+                >
+                  {t(lang, "external_import_open_button")}
+                </button>
+              </div>
+            </div>
+            {displayHoldings.length === 0 ? (
               <p className="muted">{t(lang, "holdings_empty")}</p>
             ) : (
               <>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>{t(lang, "holdings_col_asset")}</th>
-                      <th>{t(lang, "holdings_col_amount")}</th>
-                      <th>{holdingsValueHeader}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {holdings.map((h, index) => {
-                      const primaryRaw =
-                        lang === "de" ? h.value_eur ?? null : h.value_usd ?? null;
-                      const secondaryRaw =
-                        lang === "de" ? h.value_usd ?? null : h.value_eur ?? null;
+                                
+                <div className="holdings-summary">
+                  <div className="holdings-summary-item">
+                    <div className="holdings-summary-label">
+                      {t(lang, "holdings_portfolio_value")}
+                    </div>
+                    <div className="holdings-summary-value">
+                      {(() => {
+                        const baseIsUsd = config?.base_currency === "USD";
+                        const primaryRaw = baseIsUsd
+                          ? portfolioUsd ?? null
+                          : portfolioEur ?? null;
+                        const primarySymbol = baseIsUsd ? "$" : "€";
+                        const fallbackRaw = baseIsUsd
+                          ? portfolioEur ?? null
+                          : portfolioUsd ?? null;
+                        const fallbackSymbol = baseIsUsd ? "€" : "$";
 
-                      const primarySymbol = lang === "de" ? "€" : "$";
-                      const secondarySymbol = lang === "de" ? "$" : "€";
-
-                      let valueDisplay: string | null = null;
-                      if (primaryRaw != null) {
-                        valueDisplay = `${primaryRaw.toLocaleString(currentLocale, {
-                          minimumFractionDigits: 0,
-                          maximumFractionDigits: 3,
-                        })} ${primarySymbol}`;
-                        if (secondaryRaw != null) {
-                          valueDisplay += ` (${secondaryRaw.toLocaleString(currentLocale, {
+                        const fmt = (
+                          value: number | null | undefined,
+                          symbol: string,
+                        ): string | null => {
+                          if (value == null || Math.abs(value) <= 0.000001)
+                            return null;
+                          return `${value.toLocaleString(currentLocale, {
                             minimumFractionDigits: 0,
-                            maximumFractionDigits: 3,
-                          })} ${secondarySymbol})`;
-                        }
-                      }
+                            maximumFractionDigits: 2,
+                          })} ${symbol}`;
+                        };
 
-                      return (
-                        <tr key={`${h.asset_symbol}-${index}`}>
-                          <td>{h.asset_symbol}</td>
-                          <td>
-                            {h.total_amount.toLocaleString(currentLocale, {
-                              maximumFractionDigits: 8,
-                            })}
-                          </td>
-                          <td>
-                            {valueDisplay ? (
-                              valueDisplay
-                            ) : (
-                              <button
-                                type="button"
-                                className="btn-link"
-                                disabled={pricesRefreshing}
-                                onClick={handleReloadHoldingPrices}
-                              >
-                                {pricesRefreshing
-                                  ? t(lang, "holdings_price_loading")
-                                  : t(lang, "holdings_price_reload")}
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                <div style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
-                  <strong>{t(lang, "holdings_portfolio_value")}:</strong>{" "}
-                  {(() => {
-                    const hasEur =
-                      portfolioEur != null &&
-                      Math.abs(portfolioEur) > 0.000001;
-                    const hasUsd =
-                      portfolioUsd != null &&
-                      Math.abs(portfolioUsd) > 0.000001;
+                        return (
+                          fmt(primaryRaw, primarySymbol) ??
+                          fmt(fallbackRaw, fallbackSymbol) ??
+                          "-"
+                        );
+                      })()}
+                    </div>
+                  </div>
+                  <div className="holdings-summary-item">
+                    <div className="holdings-summary-label">
+                      {t(lang, "holdings_portfolio_assets_count")}
+                    </div>
+                    <div className="holdings-summary-value">
+                      {displayHoldings.length}
+                    </div>
+                  </div>
+                </div>
+                <div className="holdings-grid">
+                  {displayHoldings.map((h) => {
+                    const baseIsUsd = config?.base_currency === "USD";
+                    const primaryRaw = baseIsUsd
+                      ? h.value_usd ?? null
+                      : h.value_eur ?? null;
+                    const primarySymbol = baseIsUsd ? "$" : "€";
 
-                    if (lang === "de") {
-                      if (hasEur) {
-                        return (
-                          <>
-                            {portfolioEur!.toLocaleString(currentLocale, {
-                              minimumFractionDigits: 0,
-                              maximumFractionDigits: 3,
-                            })}{" "}
-                            €
-                            {hasUsd && (
-                              <>
-                                {" "}
-                                (
-                                {portfolioUsd!.toLocaleString(currentLocale, {
-                                  minimumFractionDigits: 0,
-                                  maximumFractionDigits: 3,
-                                })}{" "}
-                                $)
-                              </>
-                            )}
-                          </>
-                        );
-                      }
-                      if (hasUsd) {
-                        return (
-                          <>
-                            {portfolioUsd!.toLocaleString(currentLocale, {
-                              minimumFractionDigits: 0,
-                              maximumFractionDigits: 3,
-                            })}{" "}
-                            $
-                          </>
-                        );
-                      }
-                      return "-";
-                    } else {
-                      if (hasUsd) {
-                        return (
-                          <>
-                            {portfolioUsd!.toLocaleString(currentLocale, {
-                              minimumFractionDigits: 0,
-                              maximumFractionDigits: 3,
-                            })}{" "}
-                            $
-                            {hasEur && (
-                              <>
-                                {" "}
-                                (
-                                {portfolioEur!.toLocaleString(currentLocale, {
-                                  minimumFractionDigits: 0,
-                                  maximumFractionDigits: 3,
-                                })}{" "}
-                                €)
-                              </>
-                            )}
-                          </>
-                        );
-                      }
-                      if (hasEur) {
-                        return (
-                          <>
-                            {portfolioEur!.toLocaleString(currentLocale, {
-                              minimumFractionDigits: 0,
-                              maximumFractionDigits: 3,
-                            })}{" "}
-                            €
-                          </>
-                        );
-                      }
-                      return "-";
-                    }
-                  })()}
+                    const value =
+                      primaryRaw != null
+                        ? `${primaryRaw.toLocaleString(currentLocale, {
+                            minimumFractionDigits: 0,
+                            maximumFractionDigits: 2,
+                          })} ${primarySymbol}`
+                        : null;
+
+                    return (
+                      <div key={h.asset_symbol} className="holding-card">
+                        <div className="holding-card-header">
+                          <span className="holding-asset">
+                            {h.asset_symbol}
+                          </span>
+                        </div>
+                        <div className="holding-card-body">
+                          <div className="holding-row">
+                            <span className="holding-label">
+                              {t(lang, "holdings_col_amount")}
+                            </span>
+                            <span className="holding-value">
+                              {h.total_amount.toLocaleString(currentLocale, {
+                                maximumFractionDigits: 8,
+                              })}
+                            </span>
+                          </div>
+                          <div className="holding-row">
+                            <span className="holding-label">
+                              {config?.base_currency === "USD"
+                                ? t(lang, "holdings_col_value_usd")
+                                : t(lang, "holdings_col_value_eur")}
+                            </span>
+                            <span className="holding-value">
+                              {value ?? (
+                                <>
+                                  <span className="holding-value-na">N/A</span>
+                                  <button
+                                    type="button"
+                                    className="icon-button"
+                                    aria-label={t(
+                                      lang,
+                                      "holdings_price_reload",
+                                    )}
+                                    title={t(lang, "holdings_price_reload")}
+                                    disabled={pricesRefreshing}
+                                    onClick={handleReloadHoldingPrices}
+                                  >
+                                    {pricesRefreshing ? "…" : "⟳"}
+                                  </button>
+                                </>
+                              )}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </>
             )}
-          </div>
-
-          <div className="card">
-            <h3>
-              {editingId ? t(lang, "form_title_edit") : t(lang, "form_title_new")}
-            </h3>
-            <form className="form" onSubmit={handleSubmit}>
-              <div className="form-row">
-                <label>{t(lang, "form_asset")}</label>
-                <input
-                  name="asset_symbol"
-                  value={form.asset_symbol}
-                  onChange={handleChange}
-                  placeholder="IOTA, BTC, ETH..."
-                  required
-                />
-              </div>
-              <div className="form-row">
-                <label>{t(lang, "form_type")}</label>
-                <select name="tx_type" value={form.tx_type} onChange={handleChange}>
-                  <option value="BUY">BUY</option>
-                  <option value="SELL">SELL</option>
-                  <option value="TRANSFER_IN">TRANSFER_IN</option>
-                  <option value="TRANSFER_OUT">TRANSFER_OUT</option>
-                  <option value="STAKING_REWARD">STAKING_REWARD</option>
-                  <option value="AIRDROP">AIRDROP</option>
-                </select>
-              </div>
-              <div className="form-row">
-                <label>{t(lang, "form_amount")}</label>
-                <input
-                  type="number"
-                  step="0.00000001"
-                  name="amount"
-                  value={form.amount}
-                  onChange={handleChange}
-                  placeholder="0"
-                  required
-                />
-              </div>
-              <div className="form-row">
-                <label>{t(lang, "form_price")}</label>
-                <input
-                  type="number"
-                  step="0.00000001"
-                  name="price_fiat"
-                  value={form.price_fiat}
-                  onChange={handleChange}
-                  placeholder={t(lang, "form_price_placeholder")}
-                />
-              </div>
-              <div className="form-row">
-                <label>{t(lang, "form_fiat_currency")}</label>
-                <input
-                  name="fiat_currency"
-                  value={form.fiat_currency}
-                  onChange={handleChange}
-                />
-              </div>
-              <div className="form-row">
-                <label>{t(lang, "form_timestamp")}</label>
-                <input
-                  type="datetime-local"
-                  name="timestamp"
-                  value={form.timestamp}
-                  onChange={handleChange}
-                  required
-                  lang={currentLocale}
-                />
-              </div>
-              <div className="form-row">
-                <label>{t(lang, "form_source")}</label>
-                <input
-                  name="source"
-                  value={form.source}
-                  onChange={handleChange}
-                  placeholder={t(lang, "form_source_placeholder")}
-                />
-              </div>
-              <div className="form-row">
-                <label>{t(lang, "form_tx_id")}</label>
-                <input
-                  name="tx_id"
-                  value={form.tx_id}
-                  onChange={handleChange}
-                  placeholder="optional"
-                />
-              </div>
-              <div className="form-row">
-                <label>{t(lang, "form_note")}</label>
-                <textarea
-                  name="note"
-                  value={form.note}
-                  onChange={handleChange}
-                  rows={2}
-                  placeholder={t(lang, "form_note_placeholder")}
-                />
-              </div>
-
-              <div className="form-actions">
-                <button type="submit" className="btn-primary">
-                  {editingId ? t(lang, "form_update") : t(lang, "form_save")}
-                </button>
-                {editingId && (
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={resetForm}
-                  >
-                    {t(lang, "form_cancel")}
-                  </button>
-                )}
-              </div>
-            </form>
-          </div>
         </section>
-
-        <section className="card">
+<section className="card">
           <h3>{t(lang, "table_tx_title")}</h3>
 <div className="tx-filters">
           <div className="tx-filter-group form-row">
@@ -1679,7 +1671,7 @@ const handleRestoreEncryptedBackup = async () => {
                         {tx.price_fiat != null
                           ? `${tx.price_fiat.toLocaleString(currentLocale, {
                               minimumFractionDigits: 0,
-                              maximumFractionDigits: 3,
+                              maximumFractionDigits: 2,
                             })} ${tx.fiat_currency}`
                           : "-"}
                       </td>
@@ -1687,7 +1679,7 @@ const handleRestoreEncryptedBackup = async () => {
                         {tx.fiat_value != null
                           ? `${tx.fiat_value.toLocaleString(currentLocale, {
                               minimumFractionDigits: 0,
-                              maximumFractionDigits: 3,
+                              maximumFractionDigits: 2,
                             })} ${tx.fiat_currency}`
                           : "-"}
                       </td>
@@ -1730,6 +1722,7 @@ const handleRestoreEncryptedBackup = async () => {
                               note: tx.note || "",
                               tx_id: tx.tx_id || "",
                             });
+                            setShowTxFormOverlay(true);
                           }}
                         >
                           {t(lang, "action_edit")}
@@ -1914,7 +1907,284 @@ const handleRestoreEncryptedBackup = async () => {
         </section>
         )}
 
-      </main>
+      
+      {showTransactionForm && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.4)",
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1rem",
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              position: "relative",
+              maxWidth: "720px",
+              width: "100%",
+              maxHeight: "80vh",
+              overflow: "auto",
+            }}
+          >
+            <button
+              type="button"
+              className="btn-icon-close"
+              onClick={() => {
+                resetForm();
+                setShowTransactionForm(false);
+              }}
+              aria-label={t(lang, "close_overlay")}
+              title={t(lang, "close_overlay")}
+            >
+              ×
+            </button>
+            <h3>
+              {editingId ? t(lang, "form_title_edit") : t(lang, "form_title_new")}
+            </h3>
+            <form className="form" onSubmit={handleSubmit}>
+              <div className="form-row">
+                <label>{t(lang, "form_asset")}</label>
+                <input
+                  name="asset_symbol"
+                  value={form.asset_symbol}
+                  onChange={handleChange}
+                  placeholder="IOTA, BTC, ETH..."
+                  required
+                />
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_type")}</label>
+                <select name="tx_type" value={form.tx_type} onChange={handleChange}>
+                  <option value="BUY">BUY</option>
+                  <option value="SELL">SELL</option>
+                  <option value="TRANSFER_IN">TRANSFER_IN</option>
+                  <option value="TRANSFER_OUT">TRANSFER_OUT</option>
+                  <option value="STAKING_REWARD">STAKING_REWARD</option>
+                  <option value="AIRDROP">AIRDROP</option>
+                </select>
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_amount")}</label>
+                <input
+                  type="number"
+                  step="0.00000001"
+                  name="amount"
+                  value={form.amount}
+                  onChange={handleChange}
+                  placeholder="0"
+                  required
+                />
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_price")}</label>
+                <input
+                  type="number"
+                  step="0.00000001"
+                  name="price_fiat"
+                  value={form.price_fiat}
+                  onChange={handleChange}
+                  placeholder={t(lang, "form_price_placeholder")}
+                />
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_pair_currency")}</label>
+                <input
+                  name="fiat_currency"
+                  value={form.fiat_currency}
+                  onChange={handleChange}
+                  placeholder={t(lang, "form_pair_currency_placeholder")}
+                />
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_timestamp")}</label>
+                <input
+                  type="datetime-local"
+                  name="timestamp"
+                  value={form.timestamp}
+                  onChange={handleChange}
+                  required
+                  lang={currentLocale}
+                />
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_source")}</label>
+                <input
+                  name="source"
+                  value={form.source}
+                  onChange={handleChange}
+                  placeholder={t(lang, "form_source_placeholder")}
+                />
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_tx_id")}</label>
+                <input
+                  name="tx_id"
+                  value={form.tx_id}
+                  onChange={handleChange}
+                  placeholder="optional"
+                />
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_note")}</label>
+                <textarea
+                  name="note"
+                  value={form.note}
+                  onChange={handleChange}
+                  rows={2}
+                  placeholder={t(lang, "form_note_placeholder")}
+                />
+              </div>
+
+              <div className="form-actions">
+                <button type="submit" className="btn-primary">
+                  {editingId ? t(lang, "form_update") : t(lang, "form_save")}
+                </button>
+                {editingId && (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={resetForm}
+                  >
+                    {t(lang, "close_overlay")}
+                  </button>
+                )}
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showExternalImport && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.4)",
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1rem",
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              position: "relative",
+              maxWidth: "720px",
+              width: "100%",
+              maxHeight: "80vh",
+              overflow: "auto",
+            }}
+          >
+            <button
+              type="button"
+              className="btn-icon-close"
+              onClick={() => {
+                setShowExternalImport(false);
+                setExternalImportResult(null);
+                setExternalFileName(null);
+                setExternalImportSource("binance_trade_xlsx");
+              }}
+              aria-label={t(lang, "close_overlay")}
+              title={t(lang, "close_overlay")}
+            >
+              ×
+            </button>
+            <h3>{t(lang, "external_import_title")}</h3>
+            <p className="muted">
+              {t(lang, "external_import_description")}
+            </p>
+
+            <div className="form">
+              <div className="form-row">
+                <label>{t(lang, "external_import_source_label")}</label>
+                <select
+                  value={externalImportSource}
+                  onChange={(e) => {
+                    setExternalImportSource(e.target.value);
+                    setExternalImportResult(null);
+                    setExternalFileName(null);
+                  }}
+                >
+                  <option value="binance_trade_xlsx">
+                    {t(lang, "external_import_source_binance_xlsx")}
+                  </option>
+                  <option value="bitpanda_csv">
+                    {t(lang, "external_import_source_bitpanda_csv")}
+                  </option>
+                </select>
+              </div>
+
+              <div className="form-row file-row">
+                <label>{t(lang, "external_import_file_label")}</label>
+                <div className="file-input-wrapper">
+                  <input
+                    type="file"
+                    accept={
+                      externalImportSource === "binance_trade_xlsx"
+                        ? ".xlsx"
+                        : ".csv"
+                    }
+                    onChange={handleExternalFileChange}
+                    disabled={externalImporting}
+                  />
+                  <span className="file-name">
+                    {externalFileName || t(lang, "external_import_no_file")}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {externalImporting && (
+              <p className="muted">{t(lang, "external_import_running")}</p>
+            )}
+
+            {externalImportResult && (
+              <div className="csv-result">
+                <p className="muted">
+                  {t(lang, "csv_result_prefix")} {externalImportResult.imported}
+                </p>
+                {externalImportResult.errors &&
+                  externalImportResult.errors.length > 0 && (
+                    <div className="csv-errors">
+                      <p className="muted">
+                        {t(lang, "csv_result_errors_title")}
+                      </p>
+                      <ul>
+                        {externalImportResult.errors.map((err, index) => (
+                          <li key={index}>{err}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+              </div>
+            )}
+
+            <div
+              style={{
+                marginTop: "1rem",
+                display: "flex",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setShowExternalImport(false)}
+              >
+                {t(lang, externalImportResult ? "external_import_done_button" : "form_cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+</main>
     </div>
   );
 };

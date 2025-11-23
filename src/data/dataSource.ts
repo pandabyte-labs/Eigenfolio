@@ -14,6 +14,48 @@ import { DEFAULT_HOLDING_PERIOD_DAYS, DEFAULT_UPCOMING_WINDOW_DAYS } from "../do
 import { CURRENT_CSV_SCHEMA_VERSION, CSV_SCHEMA_VERSION_COLUMN } from "./csvSchema";
 import { t } from "../i18n";
 
+// Lazily loaded XLSX module so that it is only pulled in when needed.
+let xlsxModulePromise: Promise<any> | null = null;
+
+async function getXlsxModule(): Promise<any> {
+  if (!xlsxModulePromise) {
+    // Dynamic import keeps the initial bundle smaller.
+    xlsxModulePromise = import("xlsx");
+  }
+  return xlsxModulePromise;
+}
+
+// Minimal CSV parser that understands quotes and escaped quotes.
+// This is used for importing third-party CSV exports (e.g. Bitpanda)
+// where fields may contain commas and quotes.
+function parseCsvLine(line: string): string[] {
+  const result: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        // Escaped quote
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === "," && !inQuotes) {
+      result.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+
+  result.push(current);
+  return result;
+}
+
 /**
  * Abstraction layer for portfolio data access.
  *
@@ -48,6 +90,18 @@ export interface PortfolioDataSource {
   importCsv(lang: Language, file: File): Promise<CsvImportResult>;
 
   exportPdf(lang: Language, transactions?: Transaction[]): Promise<Blob>;
+
+  /** External imports (e.g. Binance XLSX). */
+  importBinanceSpotXlsx?(
+    lang: Language,
+    file: File,
+  ): Promise<CsvImportResult>;
+
+  /** External imports for Bitpanda CSV trade history. */
+  importBitpandaCsv?(
+    lang: Language,
+    file: File,
+  ): Promise<CsvImportResult>;
 }
 
 /**
@@ -424,10 +478,24 @@ export function computeLocalHoldings(transactions: Transaction[]): HoldingsRespo
   }
 
   const items: HoldingsResponse["items"] = [];
+  // Fiat-like symbols are not shown as holdings (these would rather be bank balances).
+  const fiatSymbols = new Set<string>([
+    "EUR",
+    "USD",
+    "CHF",
+    "GBP",
+    "JPY",
+    "AUD",
+    "CAD",
+    "CNY",
+  ]);
   let portfolio_value_eur: number | null = null;
   let portfolio_value_usd: number | null = null;
 
   for (const [symbol, entry] of map.entries()) {
+    // Negative or zero quantities are not shown in the holdings overview.
+    if (fiatSymbols.has(symbol.toUpperCase())) continue;
+    if (!Number.isFinite(entry.quantity) || entry.quantity <= 0) continue;
     if (Math.abs(entry.quantity) < 1e-12) continue;
     items.push({
       asset_symbol: symbol,
@@ -473,7 +541,7 @@ export function computeLocalExpiring(transactions: Transaction[], config: AppCon
     const diffMs = end.getTime() - now.getTime();
     const remainingDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
 
-    if (remainingDays < -upcomingDays || remainingDays > upcomingDays) {
+    if (remainingDays < 0 || remainingDays > upcomingDays) {
       continue;
     }
 
@@ -775,6 +843,445 @@ class LocalDataSource implements PortfolioDataSource {
       errors,
     };
   }
+  async importBinanceSpotXlsx(lang: Language, file: File): Promise<CsvImportResult> {
+    // Read the XLSX file as ArrayBuffer so XLSX can parse it.
+    const buffer = await file.arrayBuffer();
+    const XLSX = await getXlsxModule();
+
+    // Read workbook; cellDates:true makes date columns proper Date objects.
+    const workbook = XLSX.read(buffer, {
+      type: "array",
+      cellDates: true,
+    });
+
+    const firstSheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[firstSheetName];
+    if (!sheet) {
+      return {
+        imported: 0,
+        errors: [t(lang, "csv_import_unknown_error")],
+      };
+    }
+
+    // Validate that the expected Binance columns are present in the header.
+    const headerRows = XLSX.utils.sheet_to_json(sheet, {
+      header: 1,
+      defval: "",
+    }) as unknown as unknown[][];
+    const header = (headerRows && headerRows.length > 0 ? headerRows[0] : []) as unknown[];
+    const headerCols = header.map((c) => String(c || "").trim());
+
+    const expectedCols = [
+      "Date(UTC)",
+      "Pair",
+      "Base Asset",
+      "Quote Asset",
+      "Type",
+      "Price",
+      "Amount",
+      "Total",
+      "Fee",
+      "Fee Coin",
+    ];
+
+    const missingCols = expectedCols.filter((col) => !headerCols.includes(col));
+    if (missingCols.length > 0) {
+      return {
+        imported: 0,
+        errors: [
+          `${t(lang, "external_import_missing_columns_prefix")} ${missingCols.join(", ")}`,
+        ],
+      };
+    }
+
+    // Convert to JSON rows; defval keeps empty strings instead of undefined.
+    const rows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(sheet, {
+      defval: "",
+    });
+
+    const items = loadLocalTransactions();
+    const existingKeys = new Set<string>(items.map((tx) => buildTransactionDedupKey(tx)));
+    const importedKeys = new Set<string>();
+    const errors: string[] = [];
+    let importedCount = 0;
+
+    rows.forEach((row, index) => {
+      const rowIndex = index + 2; // +2 because header is Excel row 1
+
+      try {
+        const rawDate = row["Date(UTC)"];
+        const rawBase = row["Base Asset"];
+        const rawQuote = row["Quote Asset"];
+        const rawType = row["Type"];
+        const rawAmount = row["Amount"];
+        const rawPrice = row["Price"];
+        const rawTotal = row["Total"];
+        const rawFee = row["Fee"];
+        const rawFeeCoin = row["Fee Coin"];
+        const rawPair = row["Pair"];
+
+        if (!rawDate || !rawBase || !rawType || !rawAmount) {
+          // Missing required Binance fields – skip this row.
+          errors.push(
+            `${t(lang, "csv_import_error_line_prefix")} ${rowIndex}: ${t(
+              lang,
+              "csv_import_unknown_error",
+            )}`,
+          );
+          return;
+        }
+
+        // Parse timestamp (Binance sheet is documented as UTC).
+        let date: Date;
+        if (rawDate instanceof Date) {
+          date = rawDate;
+        } else if (typeof rawDate === "string") {
+          const normalized = rawDate.trim().replace(" ", "T");
+          const withZ = normalized.endsWith("Z") ? normalized : `${normalized}Z`;
+          date = new Date(withZ);
+        } else {
+          // Fallback: let JS try to interpret it
+          date = new Date(rawDate as any);
+        }
+
+        if (isNaN(date.getTime())) {
+          errors.push(
+            `${t(lang, "csv_import_error_line_prefix")} ${rowIndex}: ${t(
+              lang,
+              "csv_import_unknown_error",
+            )}`,
+          );
+          return;
+        }
+
+        const timestamp = date.toISOString();
+
+        // Parse numbers – parseFloat also understands scientific notation.
+        const amount = parseFloat(String(rawAmount));
+        if (!Number.isFinite(amount)) {
+          errors.push(
+            `${t(lang, "csv_import_error_line_prefix")} ${rowIndex}: ${t(
+              lang,
+              "csv_import_unknown_error",
+            )}`,
+          );
+          return;
+        }
+
+        const price =
+          rawPrice !== "" && rawPrice != null ? parseFloat(String(rawPrice)) : null;
+        const total =
+          rawTotal !== "" && rawTotal != null ? parseFloat(String(rawTotal)) : null;
+
+        const baseAsset = String(rawBase || "").trim().toUpperCase();
+        const quoteAsset = String(rawQuote || "").trim().toUpperCase();
+
+        const typeUpper = String(rawType || "").toUpperCase();
+        let txType = "BUY";
+        if (typeUpper.includes("SELL")) {
+          txType = "SELL";
+        } else if (typeUpper.includes("BUY")) {
+          txType = "BUY";
+        }
+
+        const id = getNextLocalId();
+
+        // If we have a price, store it; otherwise prefer Total / Amount.
+        let priceFiat: number | null = null;
+        if (Number.isFinite(price as number)) {
+          priceFiat = price as number;
+        } else if (Number.isFinite(total as number) && amount !== 0) {
+          priceFiat = (total as number) / amount;
+        }
+
+        const fiatValue =
+          priceFiat != null && Number.isFinite(priceFiat) ? priceFiat * amount : null;
+
+        // Fee is currently stored only in the note to keep the schema simple.
+        let note = `Binance trade ${rawPair || `${baseAsset}/${quoteAsset}`}`;
+        if (rawFee && rawFeeCoin) {
+          note += ` (fee ${rawFee} ${rawFeeCoin})`;
+        }
+
+        const tx: Transaction = {
+          id,
+          asset_symbol: baseAsset,
+          tx_type: txType,
+          amount,
+          price_fiat: priceFiat,
+          fiat_currency: quoteAsset || "USDT",
+          timestamp,
+          source: "BINANCE",
+          note,
+          tx_id: null,
+          fiat_value: fiatValue,
+          value_eur: null,
+          value_usd: null,
+        };
+
+        const key = buildTransactionDedupKey(tx);
+        if (existingKeys.has(key) || importedKeys.has(key)) {
+          errors.push(`Line ${rowIndex}: duplicate transaction detected (skipped).`);
+          return;
+        }
+
+        items.push(tx);
+        existingKeys.add(key);
+        importedKeys.add(key);
+        importedCount += 1;
+      } catch (err) {
+        console.error("Failed to import Binance row", err);
+        errors.push(
+          `${t(lang, "csv_import_error_line_prefix")} ${rowIndex}: ${t(
+            lang,
+            "csv_import_unknown_error",
+          )}`,
+        );
+      }
+    });
+
+    saveLocalTransactions(items);
+
+    return {
+      imported: importedCount,
+      errors,
+    };
+  }
+
+
+
+
+  async importBitpandaCsv(lang: Language, file: File): Promise<CsvImportResult> {
+    const text = await file.text();
+    const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    if (lines.length < 2) {
+      return {
+        imported: 0,
+        errors: [t(lang, "csv_import_unknown_error")],
+      };
+    }
+
+    // Find the header line which contains the Bitpanda trade columns.
+    const headerIndex = lines.findIndex(
+      (l) => l.includes("Transaction ID") && l.includes("Timestamp"),
+    );
+    if (headerIndex === -1) {
+      return {
+        imported: 0,
+        errors: [t(lang, "csv_import_unknown_error")],
+      };
+    }
+
+    const headerParts = parseCsvLine(lines[headerIndex]);
+    const headerCols = headerParts.map((c) =>
+      c.replace(/^"+|"+$/g, "").trim(),
+    );
+
+    const required = [
+      "Transaction ID",
+      "Timestamp",
+      "Transaction Type",
+      "In/Out",
+      "Amount Fiat",
+      "Fiat",
+      "Amount Asset",
+      "Asset",
+      "Asset class",
+    ];
+
+    const missing = required.filter((r) => !headerCols.includes(r));
+    if (missing.length > 0) {
+      return {
+        imported: 0,
+        errors: [
+          `${t(lang, "external_import_missing_columns_prefix")} ${missing.join(
+            ", ",
+          )}`,
+        ],
+      };
+    }
+
+    const items = loadLocalTransactions();
+    const existingKeys = new Set<string>(
+      items.map((tx) => buildTransactionDedupKey(tx)),
+    );
+    const importedKeys = new Set<string>();
+    const errors: string[] = [];
+    let importedCount = 0;
+
+    for (let i = headerIndex + 1; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line.trim()) continue;
+
+      const cols = parseCsvLine(line);
+      if (cols.length < headerCols.length) {
+        // Skip malformed rows but record a warning.
+        errors.push(
+          `${t(lang, "csv_import_error_line_prefix")} ${
+            i + 1
+          }: ${t(lang, "csv_import_unknown_error")}`,
+        );
+        continue;
+      }
+
+      const record: Record<string, string> = {};
+      headerCols.forEach((colName, idx) => {
+        const raw = cols[idx] ?? "";
+        record[colName] = raw.replace(/^"+|"+$/g, "").trim();
+      });
+
+      try {
+        const assetClass = (record["Asset class"] || "").trim();
+        if (assetClass !== "Cryptocurrency") {
+          // For now we only import cryptocurrency legs; fiat-only movements are ignored.
+          continue;
+        }
+
+        const rawTimestamp = record["Timestamp"];
+        if (!rawTimestamp) {
+          errors.push(
+            `${t(lang, "csv_import_error_line_prefix")} ${
+              i + 1
+            }: ${t(lang, "csv_import_unknown_error")}`,
+          );
+          continue;
+        }
+
+        const date = new Date(rawTimestamp);
+        if (isNaN(date.getTime())) {
+          errors.push(
+            `${t(lang, "csv_import_error_line_prefix")} ${
+              i + 1
+            }: ${t(lang, "csv_import_unknown_error")}`,
+          );
+          continue;
+        }
+        const timestamp = date.toISOString();
+
+        const assetSymbol = (record["Asset"] || "").trim().toUpperCase();
+        const amountAsset = parseFloat(record["Amount Asset"] || "0");
+        if (!assetSymbol || !Number.isFinite(amountAsset) || amountAsset === 0) {
+          // Rows without a meaningful crypto amount are ignored.
+          continue;
+        }
+
+        const amountFiatRaw = record["Amount Fiat"] || "";
+        const amountFiat = parseFloat(amountFiatRaw || "0");
+        const fiatCurrency = (record["Fiat"] || "").trim().toUpperCase() || "EUR";
+
+        const txTypeRaw = (record["Transaction Type"] || "").toLowerCase();
+        const inOutRaw = (record["In/Out"] || "").toLowerCase();
+
+        let txType = "BUY";
+        if (txTypeRaw.includes("staking")) {
+          txType = "STAKING_REWARD";
+        } else if (txTypeRaw.includes("airdrop") || txTypeRaw.includes("reward")) {
+          txType = "REWARD";
+        } else if (txTypeRaw.includes("deposit") || txTypeRaw.includes("savings")) {
+          txType = "TRANSFER_IN";
+        } else if (txTypeRaw.includes("withdraw")) {
+          txType = "TRANSFER_OUT";
+        } else if (txTypeRaw.includes("trade")) {
+          txType = inOutRaw === "incoming" ? "BUY" : "SELL";
+        } else {
+          txType = inOutRaw === "incoming" ? "BUY" : "SELL";
+        }
+
+        const id = getNextLocalId();
+
+        // Prefer explicit fiat amount if present; otherwise fall back to market price.
+        let priceFiat: number | null = null;
+        if (Number.isFinite(amountFiat) && amountAsset !== 0) {
+          priceFiat = amountFiat / amountAsset;
+        } else {
+          const mktPrice = parseFloat(record["Asset market price"] || "0");
+          if (Number.isFinite(mktPrice) && mktPrice > 0) {
+            priceFiat = mktPrice;
+          }
+        }
+
+        let fiatValue: number | null = null;
+        if (priceFiat != null && Number.isFinite(priceFiat)) {
+          fiatValue = priceFiat * amountAsset;
+        } else if (Number.isFinite(amountFiat)) {
+          fiatValue = amountFiat;
+        }
+
+        const fee = parseFloat(record["Fee"] || "0");
+        const feeAsset = (record["Fee asset"] || "").trim();
+        const feePercent = record["Fee percent"] || "";
+        const spread = record["Spread"] || "";
+        const spreadCurrency = record["Spread Currency"] || "";
+        const taxFiat = record["Tax Fiat"] || "";
+
+        let note = `Bitpanda ${record["Transaction Type"] || ""} (${record["In/Out"] || ""})`;
+        const feeParts: string[] = [];
+        if (Number.isFinite(fee) && fee !== 0) {
+          feeParts.push(`fee ${fee} ${feeAsset || assetSymbol}`);
+        }
+        if (feePercent) {
+          feeParts.push(`fee% ${feePercent}`);
+        }
+        if (spread) {
+          feeParts.push(`spread ${spread} ${spreadCurrency || fiatCurrency}`);
+        }
+        if (taxFiat) {
+          feeParts.push(`tax ${taxFiat} ${fiatCurrency}`);
+        }
+        if (feeParts.length > 0) {
+          note += ` [${feeParts.join(", ")}]`;
+        }
+
+        const tx: Transaction = {
+          id,
+          asset_symbol: assetSymbol,
+          tx_type: txType,
+          amount: amountAsset,
+          price_fiat: priceFiat,
+          fiat_currency: fiatCurrency,
+          timestamp,
+          source: "BITPANDA",
+          note,
+          tx_id: record["Transaction ID"] || null,
+          fiat_value: fiatValue,
+          value_eur: null,
+          value_usd: null,
+        };
+
+        const key = buildTransactionDedupKey(tx);
+        if (existingKeys.has(key) || importedKeys.has(key)) {
+          errors.push(
+            `${t(lang, "csv_import_error_line_prefix")} ${
+              i + 1
+            }: duplicate transaction detected (skipped).`,
+          );
+          continue;
+        }
+
+        items.push(tx);
+        existingKeys.add(key);
+        importedKeys.add(key);
+        importedCount += 1;
+      } catch (err) {
+        console.error("Failed to import Bitpanda row", err);
+        errors.push(
+          `${t(lang, "csv_import_error_line_prefix")} ${
+            i + 1
+          }: ${t(lang, "csv_import_unknown_error")}`,
+        );
+      }
+    }
+
+    saveLocalTransactions(items);
+
+    return {
+      imported: importedCount,
+      errors,
+    };
+  }
+
+
+
   async exportPdf(lang: Language, transactions?: Transaction[]): Promise<Blob> {
     const txs = transactions ?? loadLocalTransactions();
 
@@ -915,10 +1422,11 @@ class LocalDataSource implements PortfolioDataSource {
 
     const colX: number[] = [];
     {
+      const colGap = 2;
       let acc = marginLeft;
       for (const w of colWidths) {
         colX.push(acc);
-        acc += w;
+        acc += w + colGap;
       }
     }
     const extraGapBetweenCurAndSource = 6;
