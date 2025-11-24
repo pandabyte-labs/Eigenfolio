@@ -1689,9 +1689,40 @@ class LocalDataSource implements PortfolioDataSource {
           maxLen = cell.length;
         }
       }
-      const maxCap = wrapColumns.has(col) ? 40 : 18;
+      // Control how "wide" each column can become in characters.
+      // Time and type can be a bit narrower because we already break them into two lines.
+      // Amount and value get a bit more room for readability.
+      let maxCap: number;
+      if (col === 0) {
+        // time
+        maxCap = 16;
+      } else if (col === 2) {
+        // type (can be quite narrow because it is always broken into two lines)
+        maxCap = 10;
+      } else if (col === 3 || col === 5) {
+        // amount, value - give these a bit more space
+        maxCap = 26;
+      } else if (col === 4) {
+        // price
+        maxCap = 22;
+      } else if (col === 7) {
+        // Source: wrap earlier to avoid pushing the note too far
+        maxCap = 20;
+      } else if (col === 8) {
+        // TX-ID: wrap earlier so hashes/ids do not stretch the layout
+        maxCap = 18;
+      } else if (col === 9) {
+        // Note: wrap earlier so the column does not dominate the width
+        maxCap = 16;
+      } else if (wrapColumns.has(col)) {
+        maxCap = 20;
+      } else {
+        maxCap = 18;
+      }
+
       const effectiveLen = Math.min(maxLen + 1, maxCap);
-      charWidths[col] = effectiveLen;
+      // Do not let columns become too narrow so that headers remain readable.
+      charWidths[col] = Math.max(6, effectiveLen);
     }
 
     const baseCharWidth = 2.0;
