@@ -1993,7 +1993,7 @@ const handleRestoreEncryptedBackup = async () => {
                               note: tx.note || "",
                               tx_id: tx.tx_id || "",
                             });
-                            setShowTxFormOverlay(true);
+                            setShowTransactionForm(true);
                           }}
                         >
                           {t(lang, "action_edit")}
@@ -2120,6 +2120,7 @@ const handleRestoreEncryptedBackup = async () => {
                             note: tx.note || "",
                             tx_id: tx.tx_id || "",
                           });
+                          setShowTransactionForm(true);
                         }}
                       >
                         {t(lang, "action_edit")}

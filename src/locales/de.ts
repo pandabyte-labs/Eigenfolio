@@ -43,7 +43,6 @@ export const de: Record<string, string> = {
   disclaimer_title: "Hinweis",
   disclaimer_line1: "Trakky ersetzt keine steuerliche oder rechtliche Beratung.",
   disclaimer_line2: "Bitte wende dich an eine Steuerberatung, bevor du Entscheidungen triffst.",
-
   csv_title: "CSV-Import & -Export",
   csv_version_info: "Exportierte CSVs enthalten eine Schema-Version (aktuell v2), damit künftige Trakky-Versionen Migrationen durchführen können. Ältere CSVs ohne Versionsspalte werden weiterhin unterstützt.",
   encryption_cloud_demo: "Bei Verbindung mit der Trakky-Cloud werden deine Daten Ende-zu-Ende verschl\u00fcsselt \u00fcbertragen. Die Verschl\u00fcsselung findet ausschlie\u00dflich auf deinem Ger\u00e4t statt.",
@@ -83,6 +82,7 @@ export const de: Record<string, string> = {
   form_tx_id: "Transaktions-ID",
   form_type: "Typ",
   form_update: "Aktualisieren",
+  close_overlay: "Schließen",
   header_error: "Beim Laden der Daten ist ein Fehler aufgetreten.",
   header_login_button: "Mit Trakky-Cloud verbinden",
   header_logout_button: "Abmelden",
@@ -179,15 +179,13 @@ export const de: Record<string, string> = {
   tx_pagination_prev: "Zurück",
   footer_copyright_prefix: "© 2025",
   external_import_title: "Externe Daten importieren",
-  external_import_description:
-    "Importiere Trades von unterstützten Börsen und wandle sie in das Trakky-Format um.",
+  external_import_description: "Importiere Trades von unterstützten Börsen und wandle sie in das Trakky-Format um.",
   external_import_source_label: "Quelle",
   external_import_source_binance_xlsx: "Binance (XLSX)",
   external_import_file_label: "Datei",
   external_import_no_file: "Keine Datei ausgewählt",
   external_import_running: "Import läuft...",
-  external_import_not_supported:
-    "Externe Importe sind in diesem Modus nicht verfügbar.",
+  external_import_not_supported: "Externe Importe sind in diesem Modus nicht verfügbar.",
   error_external_import: "Externer Import ist fehlgeschlagen.",
   external_import_source_bitpanda_csv: "Bitpanda (CSV)",
   external_import_open_button: "Externe Daten importieren",
