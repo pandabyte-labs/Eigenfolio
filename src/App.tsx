@@ -6,6 +6,7 @@ import { createPortfolioSnapshot, encryptSnapshotForCloud, decryptSnapshotFromCl
 import { CURRENT_CSV_SCHEMA_VERSION, CSV_SCHEMA_VERSION_COLUMN } from "./data/csvSchema";
 import { Transaction, HoldingsItem, HoldingsResponse, CsvImportResult, AppConfig, ExpiringHolding } from "./domain/types";
 import { DEFAULT_HOLDING_PERIOD_DAYS, DEFAULT_UPCOMING_WINDOW_DAYS } from "./domain/config";
+import { getAssetMetadata, getTxExplorerUrl, normalizeAssetSymbol } from "./domain/assets";
 import { applyPricesToHoldings, setCoingeckoApiKey, getPriceCacheSnapshot, loadPriceCacheSnapshot, fetchHistoricalPriceForSymbol, getPriceApiStatus } from "./data/priceService";
 import packageJson from "../package.json";
 
@@ -1732,8 +1733,15 @@ const handleRestoreEncryptedBackup = async () => {
                     return (
                       <div key={h.asset_symbol} className="holding-card">
                         <div className="holding-card-header">
-                          <span className="holding-asset">
-                            {h.asset_symbol}
+                          <span
+                            className="holding-asset"
+                            title={
+                              getAssetMetadata(h.asset_symbol)?.name ||
+                              h.asset_symbol ||
+                              undefined
+                            }
+                          >
+                            {getAssetMetadata(h.asset_symbol)?.symbol ?? h.asset_symbol}
                           </span>
                         </div>
                         <div className="holding-card-body">
@@ -1903,7 +1911,15 @@ const handleRestoreEncryptedBackup = async () => {
     );
   })()}
 </td>
-                      <td>{tx.asset_symbol}</td>
+                      <td
+  title={
+    getAssetMetadata(tx.asset_symbol)?.name ||
+    tx.asset_symbol ||
+    undefined
+  }
+>
+  {getAssetMetadata(tx.asset_symbol)?.symbol ?? tx.asset_symbol}
+</td>
                       <td>{formatTxTypeLabel(tx.tx_type)}</td>
                       <td>{tx.amount}</td>
                                             <td>
@@ -1990,7 +2006,23 @@ const handleRestoreEncryptedBackup = async () => {
                         })()}
                       </td>
 
-                      <td>{tx.tx_id || "-"}</td>
+                      <td>
+  {tx.tx_id ? (
+    (() => {
+      const url = getTxExplorerUrl(tx.asset_symbol, tx.tx_id);
+      if (!url) {
+        return tx.tx_id;
+      }
+      return (
+        <a href={url} target="_blank" rel="noopener noreferrer" className="txid-link">
+          {tx.tx_id}
+        </a>
+      );
+    })()
+  ) : (
+    "-"
+  )}
+</td>
                       <td>{tx.source || "-"}</td>
                       <td>
                         {!isTaxRelevant(tx) ? (

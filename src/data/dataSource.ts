@@ -13,6 +13,7 @@ import type { DataSourceMode } from "./localStore";
 import { DEFAULT_HOLDING_PERIOD_DAYS, DEFAULT_UPCOMING_WINDOW_DAYS } from "../domain/config";
 import { CURRENT_CSV_SCHEMA_VERSION, CSV_SCHEMA_VERSION_COLUMN } from "./csvSchema";
 import { t } from "../i18n";
+import { getTxExplorerUrl } from "../domain/assets";
 
 // Lazily loaded XLSX module so that it is only pulled in when needed.
 let xlsxModulePromise: Promise<any> | null = null;
@@ -1617,6 +1618,7 @@ class LocalDataSource implements PortfolioDataSource {
       colNote,
     ];
 
+    const txIdLinks: (string | null)[] = [];
     const rows: string[][] = txs.map((tx) => {
       const timeStr = tx.timestamp
         ? tx.timestamp.substring(0, 19).replace("T", " ")
@@ -1662,6 +1664,8 @@ class LocalDataSource implements PortfolioDataSource {
       const sourceStr = tx.source ?? "";
       const txIdStr = tx.tx_id ?? "";
       const noteStr = tx.note ?? "";
+      const txExplorerUrl = getTxExplorerUrl(tx.asset_symbol ?? null, tx.tx_id ?? null);
+      txIdLinks.push(txExplorerUrl);
 
       return [
         timeStr,
@@ -1813,14 +1817,32 @@ class LocalDataSource implements PortfolioDataSource {
       }
 
       // Write cell texts
-      wrapped.forEach((lines, idx) => {
-        const cellX = colX[idx] + 1;
-        let lineY = y;
-        for (const line of lines) {
-          doc.text(String(line), cellX, lineY);
-          lineY += lineHeight;
+wrapped.forEach((lines, idx) => {
+  const cellX = colX[idx] + 1;
+  let lineY = y;
+
+  for (const line of lines) {
+    doc.text(String(line), cellX, lineY);
+
+    // Add an invisible clickable link for the TX-ID column (column index 8)
+    if (idx === 8) {
+      const link = txIdLinks[rowIndex] || null;
+      if (link && line === lines[0]) {
+        const cellWidth = colWidths[idx] - 2;
+        const width = cellWidth > 0 ? cellWidth : 1;
+        const height = rowHeight - 2;
+        try {
+          doc.link(cellX, y, width, height, { url: link });
+        } catch {
+          // ignore link errors to avoid breaking PDF generation
         }
-      });
+      }
+    }
+
+    lineY += lineHeight;
+  }
+});
+;
 
       y += rowHeight;
       rowIndex += 1;
