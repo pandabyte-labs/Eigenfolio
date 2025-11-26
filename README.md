@@ -2,7 +2,7 @@
 
 > Self-hosted crypto portfolio & tax overview.
 
-Traeky is a privacy-friendly, self-hostable web app to track your crypto portfolio and generate a basic tax overview.
+Traeky is a privacy-friendly, self-hostable web app to track your crypto portfolio and generate a basic report.
 The UI runs entirely in your browser, data is stored locally, and encrypted backups can be created for safekeeping.
 
 > Cloud sync / "Traeky Cloud" integration is optional. In the standalone build described here, no portfolio data is sent to any third-party service unless you explicitly configure it.
