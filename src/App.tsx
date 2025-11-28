@@ -1,6 +1,21 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createPortfolioDataSource, type PortfolioDataSource, computeLocalHoldings, computeLocalExpiring, loadLocalTransactions, saveLocalAppConfig } from "./data/dataSource";
 import { useAuth } from "./auth/AuthContext";
+import {
+  getProfileOverview,
+  type ProfileOverview,
+  type ProfileSummary,
+  createInitialProfile,
+  createAdditionalProfile,
+  loginProfile,
+  resetActiveProfileData,
+  verifyActiveProfilePin,
+  renameActiveProfile,
+  changeActiveProfilePin,
+  deleteActiveProfile,
+  getActiveProfileSummary,
+  logoutActiveProfileSession,
+} from "./auth/profileStore";
 import { t, Language, getDefaultLanguage } from "./i18n";
 import { createPortfolioSnapshot, encryptSnapshotForCloud, decryptSnapshotFromCloud } from "./data/cloudSync";
 import { CURRENT_CSV_SCHEMA_VERSION, CSV_SCHEMA_VERSION_COLUMN } from "./data/csvSchema";
@@ -10,12 +25,16 @@ import { getAssetMetadata, getTxExplorerUrl, normalizeAssetSymbol } from "./doma
 import { applyPricesToHoldings, setCoingeckoApiKey, getPriceCacheSnapshot, loadPriceCacheSnapshot, fetchHistoricalPriceForSymbol, getPriceApiStatus } from "./data/priceService";
 import packageJson from "../package.json";
 
-const RESET_CONFIRMATION_WORD = "DELETE";
+const RESET_CONFIRMATION_WORD = "RESET";
 
 const APP_VERSION = packageJson.version;
 const LOCAL_STORAGE_LANG_KEY = "traeky_lang";
 
-const CLOUD_CONNECT_ENABLED = import.meta.env.DISABLE_CLOUD_CONNECT === "true" ? false : true;
+const rawDisableCloudConnect =
+  (import.meta.env.TRAEKY_DISABLE_CLOUD_CONNECT as string | undefined) ??
+  (import.meta.env.DISABLE_CLOUD_CONNECT as string | undefined);
+
+const CLOUD_CONNECT_ENABLED = rawDisableCloudConnect === "true" ? false : true;
 
 function formatTxTypeLabel(txType: string | null | undefined): string {
   const code = (txType || "").toUpperCase();
@@ -100,7 +119,44 @@ const App: React.FC = () => {
     () => createPortfolioDataSource(auth.mode),
     [auth.mode]
   );
-const [lang, setLang] = useState<Language>(() => {
+
+  const [activeProfile, setActiveProfile] = useState<ProfileSummary | null>(null);
+  const [profileOverview, setProfileOverview] = useState<ProfileOverview | null>(null);
+
+  const [profileNameInput, setProfileNameInput] = useState("");
+  const [profilePinInput, setProfilePinInput] = useState("");
+  const [profilePinConfirmInput, setProfilePinConfirmInput] = useState("");
+  const [profileSetupError, setProfileSetupError] = useState<string | null>(null);
+
+  const [loginProfileId, setLoginProfileId] = useState<string | null>(null);
+  const [loginPinInput, setLoginPinInput] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [isProfileLoginOverlayOpen, setIsProfileLoginOverlayOpen] = useState(false);
+
+  const [isCreateProfileOverlayOpen, setIsCreateProfileOverlayOpen] = useState(false);
+  const [createProfileNameInput, setCreateProfileNameInput] = useState("");
+  const [createProfilePinInput, setCreateProfilePinInput] = useState("");
+  const [createProfilePinConfirmInput, setCreateProfilePinConfirmInput] = useState("");
+  const [createProfileError, setCreateProfileError] = useState<string | null>(null);
+
+  const [isRenameProfileOverlayOpen, setIsRenameProfileOverlayOpen] = useState(false);
+  const [renameProfileNameInput, setRenameProfileNameInput] = useState("");
+  const [renameProfileError, setRenameProfileError] = useState<string | null>(null);
+
+  const [isPinChangeOverlayOpen, setIsPinChangeOverlayOpen] = useState(false);
+  const [pinChangeCurrentPinInput, setPinChangeCurrentPinInput] = useState("");
+  const [pinChangeNewPinInput, setPinChangeNewPinInput] = useState("");
+  const [pinChangeNewPinConfirmInput, setPinChangeNewPinConfirmInput] = useState("");
+  const [pinChangeError, setPinChangeError] = useState<string | null>(null);
+
+  const profileDropdownRef = useRef<HTMLDivElement | null>(null);
+  const [isProfileMenuOverlayOpen, setIsProfileMenuOverlayOpen] = useState(false);
+
+  const [showProfileDeleteConfirmation, setShowProfileDeleteConfirmation] = useState(false);
+  const [profileDeleteConfirmInput, setProfileDeleteConfirmInput] = useState("");
+  const [profileDeletePinInput, setProfileDeletePinInput] = useState("");
+  const [profileDeleteError, setProfileDeleteError] = useState<string | null>(null);
+  const [lang, setLang] = useState<Language>(() => {
     if (typeof window !== "undefined") {
       try {
         const stored = window.localStorage.getItem(LOCAL_STORAGE_LANG_KEY);
@@ -209,7 +265,18 @@ const [lang, setLang] = useState<Language>(() => {
   const [showExternalImport, setShowExternalImport] = useState(false);
   const [showTransactionForm, setShowTransactionForm] = useState(false);
 
+  
   useEffect(() => {
+    const overview = getProfileOverview();
+    setProfileOverview(overview);
+    if (overview.profiles.length > 0 && !loginProfileId) {
+      setLoginProfileId(overview.profiles[0].id);
+    }
+    // We intentionally run this only once during initial mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+useEffect(() => {
     try {
       if (typeof window !== "undefined") {
         window.localStorage.setItem(LOCAL_STORAGE_LANG_KEY, lang);
@@ -219,6 +286,27 @@ const [lang, setLang] = useState<Language>(() => {
     }
   }, [lang]);
 
+
+  useEffect(() => {
+    function handleGlobalPointerDown(event: MouseEvent | TouchEvent) {
+      if (!profileDropdownRef.current) return;
+      const target = event.target as Node | null;
+      if (target && profileDropdownRef.current.contains(target)) {
+        return;
+      }
+      setIsProfileMenuOverlayOpen(false);
+    }
+
+    if (isProfileMenuOverlayOpen) {
+      document.addEventListener("mousedown", handleGlobalPointerDown);
+      document.addEventListener("touchstart", handleGlobalPointerDown);
+    }
+
+    return () => {
+      document.removeEventListener("mousedown", handleGlobalPointerDown);
+      document.removeEventListener("touchstart", handleGlobalPointerDown);
+    };
+  }, [isProfileMenuOverlayOpen]);
   const [csvResult, setCsvResult] = useState<CsvImportResult | null>(null);
   const [csvFileName, setCsvFileName] = useState<string | null>(null);
   const [showResetConfirmation, setShowResetConfirmation] = useState(false);
@@ -317,11 +405,248 @@ const [lang, setLang] = useState<Language>(() => {
   }
 };
 
+  const handleInitialProfileSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setProfileSetupError(null);
+
+    if (!profilePinInput || !profilePinConfirmInput) {
+      setProfileSetupError(lang === "de" ? "Bitte gib eine PIN ein." : "Please enter a PIN.");
+      return;
+    }
+    if (profilePinInput !== profilePinConfirmInput) {
+      setProfileSetupError(lang === "de" ? "Die PINs stimmen nicht überein." : "The PIN entries do not match.");
+      return;
+    }
+
+    try {
+      const name = profileNameInput.trim() || (lang === "de" ? "Standard" : "Default");
+      const summary = await createInitialProfile(name, profilePinInput);
+      setActiveProfile(summary);
+      const overview = getProfileOverview();
+      setProfileOverview(overview);
+      setProfileNameInput("");
+      setProfilePinInput("");
+      setProfilePinConfirmInput("");
+      setProfileSetupError(null);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to create initial profile", err);
+      setProfileSetupError(
+        lang === "de"
+          ? "Das Profil konnte nicht erstellt werden. Bitte versuche es erneut."
+          : "Could not create profile. Please try again.",
+      );
+    }
+  };
+
+  const handleProfileLoginSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setLoginError(null);
+
+    if (!loginProfileId) {
+      setLoginError(lang === "de" ? "Bitte wähle ein Profil aus." : "Please select a profile.");
+      return;
+    }
+    if (!loginPinInput) {
+      setLoginError(lang === "de" ? "Bitte gib eine PIN ein." : "Please enter a PIN.");
+      return;
+    }
+
+    try {
+      const summary = await loginProfile(loginProfileId, loginPinInput);
+      setActiveProfile(summary);
+      const overview = getProfileOverview();
+      setProfileOverview(overview);
+      setLoginPinInput("");
+      setLoginError(null);
+      setIsProfileLoginOverlayOpen(false);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to log into profile", err);
+      setLoginError(lang === "de" ? "PIN ist ungültig." : "PIN is invalid.");
+    }
+  };
+
+  const handleCreateProfileSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setCreateProfileError(null);
+
+    if (!createProfilePinInput || !createProfilePinConfirmInput) {
+      setCreateProfileError(lang === "de" ? "Bitte gib eine PIN ein." : "Please enter a PIN.");
+      return;
+    }
+    if (createProfilePinInput !== createProfilePinConfirmInput) {
+      setCreateProfileError(
+        lang === "de" ? "Die PINs stimmen nicht überein." : "The PIN entries do not match.",
+      );
+      return;
+    }
+
+    try {
+      const name = createProfileNameInput.trim() || (lang === "de" ? "Profil" : "Profile");
+      const summary = await createAdditionalProfile(name, createProfilePinInput);
+      setActiveProfile(summary);
+      const overview = getProfileOverview();
+      setProfileOverview(overview);
+      setCreateProfileNameInput("");
+      setCreateProfilePinInput("");
+      setCreateProfilePinConfirmInput("");
+      setIsCreateProfileOverlayOpen(false);
+      setCreateProfileError(null);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to create additional profile", err);
+      setCreateProfileError(
+        lang === "de"
+          ? "Das Profil konnte nicht erstellt werden. Bitte versuche es erneut."
+          : "Could not create profile. Please try again.",
+      );
+    }
+  };
+
+  const handleRenameProfileSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    setRenameProfileError(null);
+
+    if (!activeProfile) {
+      return;
+    }
+
+    const name = renameProfileNameInput.trim();
+    if (!name) {
+      setRenameProfileError(
+        lang === "de" ? "Der Profilname darf nicht leer sein." : "Profile name must not be empty.",
+      );
+      return;
+    }
+
+    try {
+      renameActiveProfile(name);
+      const updated = getActiveProfileSummary();
+      if (updated) {
+        setActiveProfile(updated);
+      }
+      const overview = getProfileOverview();
+      setProfileOverview(overview);
+      setIsRenameProfileOverlayOpen(false);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to rename profile", err);
+      setRenameProfileError(
+        lang === "de"
+          ? "Der Profilname konnte nicht geändert werden."
+          : "Could not rename profile.",
+      );
+    }
+  };
+
+  const handlePinChangeSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setPinChangeError(null);
+
+    if (!pinChangeCurrentPinInput) {
+      setPinChangeError(
+        lang === "de" ? "Bitte gib deine aktuelle PIN ein." : "Please enter your current PIN.",
+      );
+      return;
+    }
+
+    if (!pinChangeNewPinInput || !pinChangeNewPinConfirmInput) {
+      setPinChangeError(
+        lang === "de" ? "Bitte gib die neue PIN ein." : "Please enter the new PIN.",
+      );
+      return;
+    }
+
+    if (pinChangeNewPinInput !== pinChangeNewPinConfirmInput) {
+      setPinChangeError(
+        lang === "de" ? "Die PINs stimmen nicht überein." : "The PIN entries do not match.",
+      );
+      return;
+    }
+
+    try {
+      await changeActiveProfilePin(pinChangeCurrentPinInput, pinChangeNewPinInput);
+      setPinChangeCurrentPinInput("");
+      setPinChangeNewPinInput("");
+      setPinChangeNewPinConfirmInput("");
+      setIsPinChangeOverlayOpen(false);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to change profile PIN", err);
+      setPinChangeError(
+        lang === "de"
+          ? "Die aktuelle PIN ist ungültig."
+          : "The current PIN is invalid.",
+      );
+    }
+  };
+
+  const handleResetProfileData = () => {
+    if (!activeProfile) {
+      return;
+    }
+    try {
+      resetActiveProfileData();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to reset profile data", err);
+    }
+    window.location.reload();
+  };
+
+  const handleDeleteProfile = async () => {
+    if (!activeProfile) {
+      return;
+    }
+    setProfileDeleteError(null);
+
+    if (profileDeleteConfirmInput !== "DELETE") {
+      return;
+    }
+
+    if (!profileDeletePinInput) {
+      setProfileDeleteError(lang === "de" ? "Bitte gib deine PIN ein." : "Please enter your PIN.");
+      return;
+    }
+
+    try {
+      const valid = await verifyActiveProfilePin(profileDeletePinInput);
+      if (!valid) {
+        setProfileDeleteError(lang === "de" ? "PIN ist ungültig." : "PIN is invalid.");
+        return;
+      }
+
+      deleteActiveProfile();
+      setProfileDeleteConfirmInput("");
+      setProfileDeletePinInput("");
+      setShowProfileDeleteConfirmation(false);
+
+      const overview = getProfileOverview();
+      setProfileOverview(overview);
+      setActiveProfile(null);
+
+      if (overview.profiles.length > 0) {
+        setLoginProfileId(overview.profiles[0].id);
+      } else {
+        setLoginProfileId(null);
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to delete profile", err);
+      setProfileDeleteError(
+        lang === "de"
+          ? "Das Profil konnte nicht gelöscht werden."
+          : "Could not delete profile.",
+      );
+    }
+
+  };
   useEffect(() => {
     // Optimistically load local transactions and holdings from storage
     // so that something is visible immediately while price/fiat enrichment
     // is still running in the background.
-    if (auth.mode !== "local-only") {
+    if (auth.mode !== "local-only" || !activeProfile) {
       return;
     }
     try {
@@ -335,12 +660,15 @@ const [lang, setLang] = useState<Language>(() => {
     // We intentionally do not depend on functions here to avoid re-running
     // this effect unnecessarily.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth.mode]);
+  }, [auth.mode, activeProfile?.id]);
 
   useEffect(() => {
+    if (!activeProfile) {
+      return;
+    }
     fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth.mode]);
+  }, [auth.mode, activeProfile?.id]);
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
@@ -1145,6 +1473,139 @@ const handleRestoreEncryptedBackup = async () => {
 
   return (
     <div className="layout">
+      {profileOverview &&
+        (profileOverview.profiles.length === 0 ||
+          (profileOverview.profiles.length > 0 && (!activeProfile || isProfileLoginOverlayOpen))) && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            {profileOverview.profiles.length === 0 ? (
+              <>
+                <h2>{t(lang, "profile_setup_title")}</h2>
+                <p className="muted">{t(lang, "profile_setup_description")}</p>
+                {profileOverview.hasLegacyData && (
+                  <p className="muted" style={{ marginTop: "0.5rem" }}>
+                    {t(lang, "profile_setup_description_migrate")}
+                  </p>
+                )}
+                {profileSetupError && (
+                  <p className="error-text modal-error">{profileSetupError}</p>
+                )}
+                <form
+                  onSubmit={handleInitialProfileSubmit}
+                  style={{ marginTop: "1rem" }}
+                >
+                  <div className="form-row">
+                    <label className="form-label">
+                      <span className="form-label-text">{t(lang, "profile_name_label")}</span>
+                      <input
+                        type="text"
+                        className="input"
+                        value={profileNameInput}
+                        onChange={(e) => setProfileNameInput(e.target.value)}
+                        placeholder={t(lang, "profile_name_placeholder")}
+                      />
+                    </label>
+                  </div>
+                  <div className="form-row">
+                    <label className="form-label">
+                      <span className="form-label-text">{t(lang, "profile_pin_label")}</span>
+                      <input
+                        type="password"
+                        className="input"
+                        value={profilePinInput}
+                        onChange={(e) => setProfilePinInput(e.target.value)}
+                        autoComplete="new-password"
+                      />
+                    </label>
+                  </div>
+                  <div className="form-row">
+                    <label className="form-label">
+                      <span className="form-label-text">{t(lang, "profile_pin_confirm_label")}</span>
+                      <input
+                        type="password"
+                        className="input"
+                        value={profilePinConfirmInput}
+                        onChange={(e) => setProfilePinConfirmInput(e.target.value)}
+                        autoComplete="new-password"
+                      />
+                    </label>
+                  </div>
+                  <div className="modal-actions">
+                    <button type="submit" className="btn-primary">
+                      {t(lang, "profile_setup_submit")}
+                    </button>
+                  </div>
+                </form>
+              </>
+            ) : (
+              <>
+                <h2>{t(lang, "profile_login_title")}</h2>
+                <p className="muted">{t(lang, "profile_login_description")}</p>
+                {loginError && <p className="error-text modal-error">{loginError}</p>}
+                <form
+                  onSubmit={handleProfileLoginSubmit}
+                  style={{ marginTop: "1rem" }}
+                >
+                  <div className="form-row">
+                    <label className="form-label">
+                      <span className="form-label-text">{t(lang, "profile_login_select_label")}</span>
+                      <select
+                        className="input"
+                        value={loginProfileId ?? ""}
+                        onChange={(e) =>
+                          setLoginProfileId(e.target.value ? e.target.value : null)
+                        }
+                      >
+                        <option value="">
+                          {lang === "de"
+                            ? "Profil auswählen…"
+                            : "Select a profile…"}
+                        </option>
+                        {profileOverview.profiles.map((profile) => (
+                          <option key={profile.id} value={profile.id}>
+                            {profile.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="form-row">
+                    <label className="form-label">
+                      <span className="form-label-text">{t(lang, "profile_login_pin_label")}</span>
+                      <input
+                        type="password"
+                        className="input"
+                        value={loginPinInput}
+                        onChange={(e) => setLoginPinInput(e.target.value)}
+                        autoComplete="current-password"
+                      />
+                    </label>
+                  </div>
+                  <div className="modal-actions">
+                    {activeProfile && (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => {
+                          setIsProfileLoginOverlayOpen(false);
+                          setLoginPinInput("");
+                          setLoginError(null);
+                        }}
+                      >
+                        {t(lang, "form_cancel")}
+                      </button>
+                    )}
+                    <button type="submit" className="btn-primary">
+                      {t(lang, "profile_login_submit")}
+                    </button>
+                  </div>
+                </form>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
       
 
       
@@ -1478,64 +1939,150 @@ const handleRestoreEncryptedBackup = async () => {
         
         
           </div>
-          <div className="card settings-card">
-<div className="sidebar-section">
+
+ 
+         <div className="card settings-card">
+            <div className="sidebar-section">
               <h2>{t(lang, "reset_local_title")}</h2>
               <p className="muted">{t(lang, "reset_local_description")}</p>
-              {showResetConfirmation ? (
-                <div className="reset-confirm">
+              {activeProfile ? (
+                <>
+                  {showResetConfirmation ? (
+                    <div className="reset-confirm">
+                      <p className="muted">
+                        {t(lang, "reset_local_confirm_hint")} <code>{RESET_CONFIRMATION_WORD}</code>
+                      </p>
+                      <div className="form-row" style={{ marginTop: "0.5rem" }}>
+                        <input
+                          type="text"
+                          value={resetConfirmationInput}
+                          onChange={(e) => setResetConfirmationInput(e.target.value)}
+                          placeholder={RESET_CONFIRMATION_WORD}
+                        />
+                      </div>
+                      <div className="reset-actions">
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => {
+                            setShowResetConfirmation(false);
+                            setResetConfirmationInput("");
+                          }}
+                        >
+                          {t(lang, "reset_local_cancel")}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-danger"
+                          disabled={resetConfirmationInput !== RESET_CONFIRMATION_WORD}
+                          onClick={handleResetProfileData}
+                        >
+                          {t(lang, "reset_local_confirm_button")}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="reset-actions reset-actions-single">
+                      <button
+                        type="button"
+                        className="btn-danger"
+                        onClick={() => {
+                          setShowResetConfirmation(true);
+                          setResetConfirmationInput("");
+                        }}
+                      >
+                        {t(lang, "reset_local_button_label")}
+                      </button>
+                    </div>
+                  )}
+
+                  <hr style={{ margin: "1.5rem 0", borderColor: "rgba(148, 163, 184, 0.35)" }} />
+
+                  <h3 style={{ marginTop: 0 }}>
+                    {lang === "de" ? "Profil löschen" : "Delete profile"}
+                  </h3>
                   <p className="muted">
-                    {t(lang, "reset_local_confirm_hint")} <code>{RESET_CONFIRMATION_WORD}</code>
+                    {lang === "de"
+                      ? "Dieses Profil und alle zugehörigen lokalen Daten werden gelöscht. Andere Profile sind davon nicht betroffen."
+                      : "This profile and all of its local data will be removed. Other profiles are not affected."}
                   </p>
-                  <div className="form-row" style={{ marginTop: "0.5rem" }}>
-                    <input
-                      type="text"
-                      value={resetConfirmationInput}
-                      onChange={(e) => setResetConfirmationInput(e.target.value)}
-                      placeholder={RESET_CONFIRMATION_WORD}
-                    />
-                  </div>
-                  <div className="reset-actions">
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => {
-                        setShowResetConfirmation(false);
-                        setResetConfirmationInput("");
-                      }}
-                    >
-                      {t(lang, "reset_local_cancel")}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-danger"
-                      disabled={resetConfirmationInput !== RESET_CONFIRMATION_WORD}
-                      onClick={() => {
-                        try {
-                          window.localStorage.clear();
-                        } catch (err) {
-                          console.error("Failed to clear localStorage", err);
-                        }
-                        window.location.reload();
-                      }}
-                    >
-                      {t(lang, "reset_local_confirm_button")}
-                    </button>
-                  </div>
-                </div>
+                  {showProfileDeleteConfirmation ? (
+                    <div className="reset-confirm" style={{ marginTop: "0.75rem" }}>
+                      <p className="muted">
+                        {lang === "de"
+                          ? "Zum endgültigen Löschen bitte DELETE eingeben und die PIN dieses Profils bestätigen."
+                          : "To confirm deletion, please type DELETE and enter this profile's PIN."}
+                      </p>
+                      <div className="form-row" style={{ marginTop: "0.5rem" }}>
+                        <input
+                          type="text"
+                          value={profileDeleteConfirmInput}
+                          onChange={(e) => setProfileDeleteConfirmInput(e.target.value)}
+                          placeholder="DELETE"
+                        />
+                      </div>
+                      <div className="form-row" style={{ marginTop: "0.5rem" }}>
+                        <input
+                          type="password"
+                          value={profileDeletePinInput}
+                          onChange={(e) => setProfileDeletePinInput(e.target.value)}
+                          placeholder={lang === "de" ? "PIN des Profils" : "Profile PIN"}
+                          autoComplete="current-password"
+                        />
+                      </div>
+                      {profileDeleteError && (
+                        <p className="error-text" style={{ marginTop: "0.5rem" }}>
+                          {profileDeleteError}
+                        </p>
+                      )}
+                      <div className="reset-actions" style={{ marginTop: "0.75rem" }}>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => {
+                            setShowProfileDeleteConfirmation(false);
+                            setProfileDeleteConfirmInput("");
+                            setProfileDeletePinInput("");
+                            setProfileDeleteError(null);
+                          }}
+                        >
+                          {t(lang, "reset_local_cancel")}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-danger"
+                          disabled={
+                            profileDeleteConfirmInput !== "DELETE" || !profileDeletePinInput
+                          }
+                          onClick={handleDeleteProfile}
+                        >
+                          {lang === "de" ? "Profil löschen" : "Delete profile"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="reset-actions reset-actions-single" style={{ marginTop: "0.75rem" }}>
+                      <button
+                        type="button"
+                        className="btn-danger"
+                        onClick={() => {
+                          setShowProfileDeleteConfirmation(true);
+                          setProfileDeleteConfirmInput("");
+                          setProfileDeletePinInput("");
+                          setProfileDeleteError(null);
+                        }}
+                      >
+                        {lang === "de" ? "Profil löschen" : "Delete profile"}
+                      </button>
+                    </div>
+                  )}
+                </>
               ) : (
-                <div className="reset-actions reset-actions-single">
-                  <button
-                    type="button"
-                    className="btn-danger"
-                    onClick={() => {
-                      setShowResetConfirmation(true);
-                      setResetConfirmationInput("");
-                    }}
-                  >
-                    {t(lang, "reset_local_button_label")}
-                  </button>
-                </div>
+                <p className="muted">
+                  {lang === "de"
+                    ? "Kein aktives Profil. Bitte zuerst ein Profil einrichten oder anmelden."
+                    : "No active profile. Please set up or log in to a profile first."}
+                </p>
               )}
             </div>
 
@@ -1583,15 +2130,6 @@ const handleRestoreEncryptedBackup = async () => {
             </p>
           </div>
           <div className="header-right">
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => {
-                setIsSettingsOpen(true);
-              }}
-            >
-              {lang === "de" ? "Einstellungen" : "Settings"}
-            </button>
             {auth.isAuthenticated && (
               <span
                 className="pill pill-small"
@@ -1617,7 +2155,111 @@ const handleRestoreEncryptedBackup = async () => {
                 {t(lang, "header_login_button")}
               </button>
             ) : null}
+            <button
+              type="button"
+              className="icon-circle-button"
+              onClick={() => {
+                setIsSettingsOpen(true);
+                setIsProfileMenuOverlayOpen(false);
+              }}
+              aria-label={t(lang, "header_settings_button")}
+            >
+              <span aria-hidden="true">⚙</span>
+            </button>
+            <div className="profile-dropdown" ref={profileDropdownRef}>
+              <button
+                type="button"
+                className="icon-circle-button"
+                onClick={() => {
+                  setIsProfileMenuOverlayOpen((open) => !open);
+                }}
+                aria-label={t(lang, "header_profile_button")}
+              >
+                <span aria-hidden="true" className="icon-user" />
+              </button>
+              {isProfileMenuOverlayOpen && activeProfile && (
+                <div className="profile-dropdown-menu">
+                  <button
+                    type="button"
+                    className="dropdown-item"
+                    onClick={() => {
+                      setRenameProfileNameInput(activeProfile.name);
+                      setRenameProfileError(null);
+                      setIsRenameProfileOverlayOpen(true);
+                      setIsProfileMenuOverlayOpen(false);
+                    }}
+                  >
+                    {t(lang, "profile_menu_rename")}
+                  </button>
+                  <button
+                    type="button"
+                    className="dropdown-item"
+                    onClick={() => {
+                      setPinChangeCurrentPinInput("");
+                      setPinChangeNewPinInput("");
+                      setPinChangeNewPinConfirmInput("");
+                      setPinChangeError(null);
+                      setIsPinChangeOverlayOpen(true);
+                      setIsProfileMenuOverlayOpen(false);
+                    }}
+                  >
+                    {t(lang, "profile_menu_change_pin")}
+                  </button>
+                  <button
+                    type="button"
+                    className="dropdown-item"
+                    onClick={() => {
+                      setCreateProfileNameInput("");
+                      setCreateProfilePinInput("");
+                      setCreateProfilePinConfirmInput("");
+                      setCreateProfileError(null);
+                      setIsCreateProfileOverlayOpen(true);
+                      setIsProfileMenuOverlayOpen(false);
+                    }}
+                  >
+                    {t(lang, "profile_menu_add_profile")}
+                  </button>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              className="icon-circle-button"
+              onClick={() => {
+                if (!activeProfile) return;
+                logoutActiveProfileSession();
+                setActiveProfile(null);
+                setProfileOverview(null);
+                setHoldings([]);
+                setHoldingsPortfolioEur(null);
+                setHoldingsPortfolioUsd(null);
+                setFxRateEurUsd(null);
+                setTransactions([]);
+                setExpiring([]);
+                setError(null);
+                setTxFilterYear("");
+                setTxFilterAsset("");
+                setTxFilterType("");
+                setTxSearch("");
+                setIsProfileMenuOverlayOpen(false);
+                const overview = getProfileOverview();
+                setProfileOverview(overview);
+                if (overview.profiles.length > 0) {
+                  setLoginProfileId(overview.profiles[0].id);
+                } else {
+                  setLoginProfileId("");
+                }
+                setLoginPinInput("");
+                setLoginError(null);
+                setIsProfileLoginOverlayOpen(true);
+              }}
+              aria-label={t(lang, "profile_menu_logout")}
+              disabled={!activeProfile}
+            >
+              <span aria-hidden="true">⏻</span>
+            </button>
           </div>
+
         </header>
 
         <section className="card">
@@ -2513,6 +3155,322 @@ const handleRestoreEncryptedBackup = async () => {
                 {t(lang, externalImportResult ? "external_import_done_button" : "form_cancel")}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+
+
+      {false && isProfileMenuOverlayOpen && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <div className="modal-header">
+              <h2>{lang === "de" ? "Profil" : "Profile"}</h2>
+              <button
+                type="button"
+                className="icon-button modal-close-button"
+                onClick={() => setIsProfileMenuOverlayOpen(false)}
+                aria-label={t(lang, "form_cancel")}
+              >
+                ×
+              </button>
+            </div>
+            <p className="muted">
+              {lang === "de"
+                ? "Verwalte dein aktives Profil. Änderungen gelten nur für dieses Profil."
+                : "Manage your active profile. Changes apply only to this profile."}
+            </p>
+            <div className="profile-menu-active">
+              {activeProfile ? (
+                <>
+                  <p className="muted" style={{ marginTop: "0.75rem" }}>
+                    {lang === "de" ? "Aktives Profil:" : "Active profile:"}
+                  </p>
+                  <p style={{ fontWeight: 600, marginTop: "0.25rem" }}>
+                    {activeProfile.name}
+                  </p>
+                </>
+              ) : (
+                <p className="muted" style={{ marginTop: "0.75rem" }}>
+                  {lang === "de"
+                    ? "Es ist aktuell kein Profil aktiv."
+                    : "There is currently no active profile."}
+                </p>
+              )}
+            </div>
+            {activeProfile && (
+              <div className="profile-menu-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    if (!activeProfile) return;
+                    setRenameProfileNameInput(activeProfile.name);
+                    setRenameProfileError(null);
+                    setIsRenameProfileOverlayOpen(true);
+                    setIsProfileMenuOverlayOpen(false);
+                  }}
+                >
+                  {lang === "de" ? "Profilname ändern" : "Rename profile"}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setPinChangeCurrentPinInput("");
+                    setPinChangeNewPinInput("");
+                    setPinChangeNewPinConfirmInput("");
+                    setPinChangeError(null);
+                    setIsPinChangeOverlayOpen(true);
+                    setIsProfileMenuOverlayOpen(false);
+                  }}
+                >
+                  {lang === "de" ? "PIN ändern" : "Change PIN"}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setCreateProfileNameInput("");
+                    setCreateProfilePinInput("");
+                    setCreateProfilePinConfirmInput("");
+                    setCreateProfileError(null);
+                    setIsCreateProfileOverlayOpen(true);
+                    setIsProfileMenuOverlayOpen(false);
+                  }}
+                >
+                  {lang === "de" ? "Weiteres Profil hinzufügen" : "Add another profile"}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    const overview = getProfileOverview();
+                    setProfileOverview(overview);
+                    if (overview.profiles.length > 0 && !loginProfileId) {
+                      setLoginProfileId(overview.profiles[0].id);
+                    }
+                    setLoginPinInput("");
+                    setLoginError(null);
+                    setIsProfileLoginOverlayOpen(true);
+                    setIsProfileMenuOverlayOpen(false);
+                  }}
+                >
+                  {lang === "de" ? "Profil wechseln" : "Switch profile"}
+                </button>
+              </div>
+            )}
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setIsProfileMenuOverlayOpen(false)}
+              >
+                {t(lang, "form_cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isRenameProfileOverlayOpen && activeProfile && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h2>{lang === "de" ? "Profilname ändern" : "Rename profile"}</h2>
+            <p className="muted">
+              {lang === "de"
+                ? "Ändere den Namen des aktiven Profils. Dies hat keinen Einfluss auf die gespeicherten Daten."
+                : "Change the name of the active profile. This does not affect the stored data."}
+            </p>
+            {renameProfileError && (
+              <p className="error-text modal-error">{renameProfileError}</p>
+            )}
+            <form
+              onSubmit={handleRenameProfileSubmit}
+              style={{ marginTop: "1rem" }}
+            >
+              <div className="form-row">
+                <label className="form-label">
+                  <span className="form-label-text">
+                    {lang === "de" ? "Neuer Profilname" : "New profile name"}
+                  </span>
+                  <input
+                    type="text"
+                    className="input"
+                    value={renameProfileNameInput}
+                    onChange={(e) => setRenameProfileNameInput(e.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setIsRenameProfileOverlayOpen(false);
+                    setRenameProfileError(null);
+                  }}
+                >
+                  {t(lang, "form_cancel")}
+                </button>
+                <button type="submit" className="btn-primary">
+                  {lang === "de" ? "Speichern" : "Save"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {isPinChangeOverlayOpen && activeProfile && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h2>{lang === "de" ? "PIN ändern" : "Change PIN"}</h2>
+            <p className="muted">
+              {lang === "de"
+                ? "Ändere die PIN für dieses Profil. Die Profildaten bleiben erhalten und werden mit der neuen PIN geschützt."
+                : "Change the PIN for this profile. The profile data will stay the same and remain protected by the new PIN."}
+            </p>
+            {pinChangeError && (
+              <p className="error-text modal-error">{pinChangeError}</p>
+            )}
+            <form
+              onSubmit={handlePinChangeSubmit}
+              style={{ marginTop: "1rem" }}
+            >
+              <div className="form-row">
+                <label className="form-label">
+                  <span className="form-label-text">
+                    {lang === "de" ? "Aktuelle PIN" : "Current PIN"}
+                  </span>
+                  <input
+                    type="password"
+                    className="input"
+                    value={pinChangeCurrentPinInput}
+                    onChange={(e) => setPinChangeCurrentPinInput(e.target.value)}
+                    autoComplete="current-password"
+                  />
+                </label>
+              </div>
+              <div className="form-row">
+                <label className="form-label">
+                  <span className="form-label-text">
+                    {lang === "de" ? "Neue PIN" : "New PIN"}
+                  </span>
+                  <input
+                    type="password"
+                    className="input"
+                    value={pinChangeNewPinInput}
+                    onChange={(e) => setPinChangeNewPinInput(e.target.value)}
+                    autoComplete="new-password"
+                  />
+                </label>
+              </div>
+              <div className="form-row">
+                <label className="form-label">
+                  <span className="form-label-text">
+                    {lang === "de" ? "Neue PIN wiederholen" : "Repeat new PIN"}
+                  </span>
+                  <input
+                    type="password"
+                    className="input"
+                    value={pinChangeNewPinConfirmInput}
+                    onChange={(e) => setPinChangeNewPinConfirmInput(e.target.value)}
+                    autoComplete="new-password"
+                  />
+                </label>
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setIsPinChangeOverlayOpen(false);
+                    setPinChangeCurrentPinInput("");
+                    setPinChangeNewPinInput("");
+                    setPinChangeNewPinConfirmInput("");
+                    setPinChangeError(null);
+                  }}
+                >
+                  {t(lang, "form_cancel")}
+                </button>
+                <button type="submit" className="btn-primary">
+                  {lang === "de" ? "PIN aktualisieren" : "Update PIN"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {isCreateProfileOverlayOpen && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h2>{lang === "de" ? "Weiteres Profil hinzufügen" : "Add another profile"}</h2>
+            <p className="muted">
+              {lang === "de"
+                ? "Erstelle ein weiteres Profil mit eigener PIN. Daten und Einstellungen werden getrennt vom aktuellen Profil gespeichert."
+                : "Create another profile with its own PIN. Data and settings are stored separately from the current profile."}
+            </p>
+            {createProfileError && (
+              <p className="error-text modal-error">{createProfileError}</p>
+            )}
+            <form
+              onSubmit={handleCreateProfileSubmit}
+              style={{ marginTop: "1rem" }}
+            >
+              <div className="form-row">
+                <label className="form-label">
+                  <span className="form-label-text">{t(lang, "profile_name_label")}</span>
+                  <input
+                    type="text"
+                    className="input"
+                    value={createProfileNameInput}
+                    onChange={(e) => setCreateProfileNameInput(e.target.value)}
+                    placeholder={t(lang, "profile_name_placeholder")}
+                  />
+                </label>
+              </div>
+              <div className="form-row">
+                <label className="form-label">
+                  <span className="form-label-text">{t(lang, "profile_pin_label")}</span>
+                  <input
+                    type="password"
+                    className="input"
+                    value={createProfilePinInput}
+                    onChange={(e) => setCreateProfilePinInput(e.target.value)}
+                    autoComplete="new-password"
+                  />
+                </label>
+              </div>
+              <div className="form-row">
+                <label className="form-label">
+                  <span className="form-label-text">{t(lang, "profile_pin_confirm_label")}</span>
+                  <input
+                    type="password"
+                    className="input"
+                    value={createProfilePinConfirmInput}
+                    onChange={(e) => setCreateProfilePinConfirmInput(e.target.value)}
+                    autoComplete="new-password"
+                  />
+                </label>
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setIsCreateProfileOverlayOpen(false);
+                    setCreateProfileError(null);
+                  }}
+                >
+                  {t(lang, "form_cancel")}
+                </button>
+                <button type="submit" className="btn-primary">
+                  {lang === "de" ? "Profil erstellen" : "Create profile"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

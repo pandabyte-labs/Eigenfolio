@@ -6,7 +6,8 @@ services:
     ports:
       - "5173:5173"
     environment:
-      DISABLE_CLOUD_CONNECT: "false"
+      TRAEKY_DISABLE_CLOUD_CONNECT: "false"
+      TRAEKY_PROFILE_PIN_SALT: "changeme"
       TRAEKY_ALLOWED_HOSTS: "all" # Default: allow all hosts (recommended to override in production)
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:5173 || exit 1"]

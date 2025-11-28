@@ -31,7 +31,7 @@ export default defineConfig(() => {
   }
 
   return {
-    envPrefix: ["VITE_", "DISABLE_"],
+    envPrefix: ["VITE_", "DISABLE_", "TRAEKY_"],
     plugins: [react()],
     server: {
       host: "0.0.0.0",

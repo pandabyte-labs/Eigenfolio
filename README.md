@@ -13,7 +13,7 @@ The UI runs entirely in your browser, data is stored locally, and encrypted back
 
 - Track crypto holdings and transactions
 - Portfolio and gain/loss overview
-- Export a tax PDF
+- Export a PDF report
 - CSV import & export (Traeky-specific schema)
 - End-to-end encrypted backups
 - Local-first: everything runs in the browser, no external API required for basic usage
@@ -66,16 +66,35 @@ docker run --rm   -p 5173:5173   --name traeky-testing   pandabytelabs/traeky:te
 
 ### Environment variables
 
-The app supports configuration via environment variables. One example is:
+The app supports configuration via environment variables.
 
-- `DISABLE_CLOUD_CONNECT`
-  - `true` → disables cloud connect features in the standalone build
-  - `false` or unset → cloud connect may be enabled (depending on your backend configuration)
+- `TRAEKY_DISABLE_CLOUD_CONNECT` (legacy alias: `DISABLE_CLOUD_CONNECT`)
+  - `"true"` → disables cloud connect features in the standalone build
+  - `"false"` or unset → cloud connect may be enabled (depending on your backend configuration)
 
-Example with cloud connect disabled:
+- `TRAEKY_PROFILE_PIN_SALT`
+  - Optional cryptographic salt used when hashing the profile PIN
+  - Must be **exactly 64 characters** long and only contain `A-Z`, `a-z`, or `0-9`
+  - If the value is invalid, Traeky falls back to a built-in default salt and logs an error in the browser console
+  - For best security, set this to a random 64-character value and keep it stable once profiles exist
+
+- `TRAEKY_ALLOWED_HOSTS`
+  - Controls which `Host` headers the dev server will accept
+  - Examples:
+    - `TRAEKY_ALLOWED_HOSTS=example.com`
+    - `TRAEKY_ALLOWED_HOSTS=example.net,example.com`
+    - `TRAEKY_ALLOWED_HOSTS=all` (or `true` / `*`) to allow all hosts
+
+Example with cloud connect disabled and a custom profile PIN salt:
 
 ```bash
-docker run --rm   -p 5173:5173   -e DISABLE_CLOUD_CONNECT=true   --name traeky   pandabytelabs/traeky:latest
+docker run --rm \
+  -p 5173:5173 \
+  -e TRAEKY_DISABLE_CLOUD_CONNECT=true \
+  -e TRAEKY_ALLOWED_HOSTS=myTraekyDomain.tld \
+  -e TRAEKY_PROFILE_PIN_SALT=CHANGEMETOARANDOMSIXTYFOURCHARALPHANUMERICVALUE00000000000000000 \
+  --name traeky \
+  pandabytelabs/traeky:latest
 ```
 
 ---

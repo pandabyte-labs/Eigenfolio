@@ -14,6 +14,8 @@ import { DEFAULT_HOLDING_PERIOD_DAYS, DEFAULT_UPCOMING_WINDOW_DAYS } from "../do
 import { CURRENT_CSV_SCHEMA_VERSION, CSV_SCHEMA_VERSION_COLUMN } from "./csvSchema";
 import { t } from "../i18n";
 import { getTxExplorerUrl } from "../domain/assets";
+import { getActiveProfileConfig, setActiveProfileConfig, getActiveProfileTransactions, setActiveProfileTransactions, getNextActiveProfileTxId } from "../auth/profileStore";
+
 
 // Lazily loaded XLSX module so that it is only pulled in when needed.
 let xlsxModulePromise: Promise<any> | null = null;
@@ -402,55 +404,9 @@ const LS_CONFIG_KEY = "traeky:app-config";
 
 function loadLocalConfig(): AppConfig {
   try {
-    const raw = window.localStorage.getItem(LS_CONFIG_KEY);
-    if (!raw) {
-      return {
-        holding_period_days: DEFAULT_HOLDING_PERIOD_DAYS,
-        upcoming_holding_window_days: DEFAULT_UPCOMING_WINDOW_DAYS,
-        base_currency: "EUR",
-        price_fetch_enabled: true,
-        coingecko_api_key: null,
-      };
-    }
-
-    const parsed = JSON.parse(raw) || {};
-    const holding =
-      typeof parsed.holding_period_days === "number" &&
-      Number.isFinite(parsed.holding_period_days)
-        ? parsed.holding_period_days
-        : DEFAULT_HOLDING_PERIOD_DAYS;
-
-    const upcoming =
-      typeof parsed.upcoming_holding_window_days === "number" &&
-      Number.isFinite(parsed.upcoming_holding_window_days)
-        ? parsed.upcoming_holding_window_days
-        : DEFAULT_UPCOMING_WINDOW_DAYS;
-
-    const baseCurrency =
-      typeof parsed.base_currency === "string" &&
-      (parsed.base_currency === "USD" || parsed.base_currency === "EUR")
-        ? (parsed.base_currency as "EUR" | "USD")
-        : "EUR";
-
-
-    const priceFetchEnabled =
-      typeof parsed.price_fetch_enabled === "boolean"
-        ? parsed.price_fetch_enabled
-        : true;
-
-    const coingeckoApiKey =
-      typeof parsed.coingecko_api_key === "string"
-        ? parsed.coingecko_api_key
-        : null;
-    return {
-      holding_period_days: holding,
-      upcoming_holding_window_days: upcoming,
-      base_currency: baseCurrency,
-      price_fetch_enabled: priceFetchEnabled,
-      coingecko_api_key: coingeckoApiKey,
-    };
+    return getActiveProfileConfig();
   } catch (err) {
-    console.warn("Failed to load local config", err);
+    console.warn("Failed to load profile config", err);
     return {
       holding_period_days: DEFAULT_HOLDING_PERIOD_DAYS,
       upcoming_holding_window_days: DEFAULT_UPCOMING_WINDOW_DAYS,
@@ -461,13 +417,15 @@ function loadLocalConfig(): AppConfig {
   }
 }
 
+
 function saveLocalConfig(config: AppConfig): void {
   try {
-    window.localStorage.setItem(LS_CONFIG_KEY, JSON.stringify(config));
+    setActiveProfileConfig(config);
   } catch (err) {
-    console.warn("Failed to save local config", err);
+    console.warn("Failed to save profile config", err);
   }
 }
+
 
 export function loadLocalAppConfig(): AppConfig {
   return loadLocalConfig();
@@ -478,25 +436,14 @@ export function saveLocalAppConfig(config: AppConfig): void {
 }
 
 export function loadLocalTransactions(): Transaction[] {
-  try {
-    const raw = window.localStorage.getItem(LS_TRANSACTIONS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed as Transaction[];
-  } catch (err) {
-    console.warn("Failed to load local transactions", err);
-    return [];
-  }
+  return getActiveProfileTransactions();
 }
 
+
 function saveLocalTransactions(items: Transaction[]): void {
-  try {
-    window.localStorage.setItem(LS_TRANSACTIONS_KEY, JSON.stringify(items));
-  } catch (err) {
-    console.warn("Failed to save local transactions", err);
-  }
+  setActiveProfileTransactions(items);
 }
+
 
 export function overwriteLocalTransactions(items: Transaction[]): void {
   saveLocalTransactions(items);
@@ -531,18 +478,14 @@ function buildTransactionDedupKey(tx: Transaction): string {
 
 function getNextLocalId(): number {
   try {
-    const raw = window.localStorage.getItem(LS_NEXT_ID_KEY);
-    const current = raw ? parseInt(raw, 10) : 1;
-    const next = Number.isFinite(current) && current > 0 ? current : 1;
-    window.localStorage.setItem(LS_NEXT_ID_KEY, String(next + 1));
-    return next;
+    return getNextActiveProfileTxId();
   } catch {
-    // Fallback: compute from current transactions
     const items = loadLocalTransactions();
     const maxId = items.reduce((acc, tx) => (tx.id && tx.id > acc ? tx.id : acc), 0);
     return maxId + 1;
   }
 }
+
 
 export function computeLocalHoldings(transactions: Transaction[]): HoldingsResponse {
   const map = new Map<string, { quantity: number }>();
