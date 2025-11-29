@@ -6,7 +6,11 @@ import { encryptJsonWithPassphrase, decryptJsonWithPassphrase, type EncryptedPay
 //   This avoids subtle issues where changing the PIN or salt would make old data unreadable.
 // - The PIN hash is stored separately in localStorage and compared during login.
 
-const FIXED_PROFILE_PIN_SALT = "traeky-profile-pin-default-salt";
+const rawProfilePinSalt =
+  (import.meta.env.VITE_PROFILE_PIN_SALT as string | undefined) ??
+  (import.meta.env.TRAEKY_PROFILE_PIN_SALT as string | undefined);
+
+const FIXED_PROFILE_PIN_SALT = rawProfilePinSalt ?? "";
 const FIXED_PROFILE_ENCRYPTION_KEY = "traeky-profile-encryption-key-v1";
 
 function getWebCrypto(): Crypto {
