@@ -1,6 +1,6 @@
 {
-  "name": "eigenfolio",
-  "version": "0.0.1",
+  "name": "traeky",
+  "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "vite",

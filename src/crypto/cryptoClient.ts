@@ -1,5 +1,5 @@
 /**
- * Client-side cryptography helpers for Eigenfolio.
+ * Client-side cryptography helpers for Traeky.
  *
  * This module provides a small wrapper around the Web Crypto API so that
  * sensitive portfolio data can be encrypted locally before being sent to any

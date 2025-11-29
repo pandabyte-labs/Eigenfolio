@@ -3,7 +3,7 @@ import type { EncryptedPayload } from "../crypto/cryptoService";
 import { encryptJsonWithPassphrase, decryptJsonWithPassphrase } from "../crypto/cryptoService";
 
 /**
- * Domain-level representation of what should be stored in the Eigenfolio Cloud.
+ * Domain-level representation of what should be stored in the Traeky Cloud.
  *
  * NOTE:
  * - Holdings and expiring-holding data can always be recomputed from
@@ -54,7 +54,7 @@ export function createPortfolioSnapshot(
  * Encrypt a portfolio snapshot for cloud storage using the frontend crypto service.
  *
  * This function is intended to be called just before sending data to the
- * Eigenfolio Cloud. It ensures that the backend only ever sees encrypted
+ * Traeky Cloud. It ensures that the backend only ever sees encrypted
  * blobs and never plaintext user data.
  */
 export async function encryptSnapshotForCloud(
@@ -67,7 +67,7 @@ export async function encryptSnapshotForCloud(
 /**
  * Decrypt a portfolio snapshot that was previously encrypted for cloud storage.
  *
- * This function will be used when restoring/syncing state from the Eigenfolio
+ * This function will be used when restoring/syncing state from the Traeky
  * Cloud. It expects the same passphrase (or key material) that was used to
  * encrypt the snapshot.
  */

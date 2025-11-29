@@ -1,21 +1,56 @@
-import React, { useEffect, useState } from "react";
-import {createPortfolioDataSource, type PortfolioDataSource, computeLocalHoldings, computeLocalExpiring, overwriteLocalTransactions, saveLocalAppConfig} from "./data/dataSource";
+import React, { useEffect, useRef, useState } from "react";
+import { createPortfolioDataSource, type PortfolioDataSource, computeLocalHoldings, computeLocalExpiring, loadLocalTransactions, saveLocalAppConfig } from "./data/dataSource";
 import { useAuth } from "./auth/AuthContext";
+import {
+  getProfileOverview,
+  type ProfileOverview,
+  type ProfileSummary,
+  createInitialProfile,
+  createAdditionalProfile,
+  loginProfile,
+  resetActiveProfileData,
+  verifyActiveProfilePin,
+  renameActiveProfile,
+  changeActiveProfilePin,
+  deleteActiveProfile,
+  getActiveProfileSummary,
+  logoutActiveProfileSession,
+} from "./auth/profileStore";
 import { t, Language, getDefaultLanguage } from "./i18n";
 import { createPortfolioSnapshot, encryptSnapshotForCloud, decryptSnapshotFromCloud } from "./data/cloudSync";
 import { CURRENT_CSV_SCHEMA_VERSION, CSV_SCHEMA_VERSION_COLUMN } from "./data/csvSchema";
 import { Transaction, HoldingsItem, HoldingsResponse, CsvImportResult, AppConfig, ExpiringHolding } from "./domain/types";
 import { DEFAULT_HOLDING_PERIOD_DAYS, DEFAULT_UPCOMING_WINDOW_DAYS } from "./domain/config";
-import { applyPricesToHoldings, getPriceCacheSnapshot, hydratePriceCache, fetchHistoricalPriceForSymbol } from "./data/priceService";
+import { getAssetMetadata, getTxExplorerUrl, normalizeAssetSymbol } from "./domain/assets";
+import { applyPricesToHoldings, setCoingeckoApiKey, getPriceCacheSnapshot, loadPriceCacheSnapshot, fetchHistoricalPriceForSymbol, getPriceApiStatus } from "./data/priceService";
 import packageJson from "../package.json";
 
-const RESET_CONFIRMATION_WORD = "DELETE";
+const RESET_CONFIRMATION_WORD = "RESET";
 
 const APP_VERSION = packageJson.version;
-const LOCAL_STORAGE_LANG_KEY = "eigenfolio_lang";
+const LOCAL_STORAGE_LANG_KEY = "traeky_lang";
 
-const CLOUD_CONNECT_ENABLED = import.meta.env.DISABLE_CLOUD_CONNECT === "true" ? false : true;
+const rawDisableCloudConnect =
+  (import.meta.env.TRAEKY_DISABLE_CLOUD_CONNECT as string | undefined) ??
+  (import.meta.env.DISABLE_CLOUD_CONNECT as string | undefined);
 
+const CLOUD_CONNECT_ENABLED = rawDisableCloudConnect === "true" ? false : true;
+
+function formatTxTypeLabel(txType: string | null | undefined): string {
+  const code = (txType || "").toUpperCase();
+  switch (code) {
+    case "STAKING_REWARD":
+      return "STAKING REWARD";
+    case "TRANSFER_IN":
+      return "TRANSFER (IN)";
+    case "TRANSFER_OUT":
+      return "TRANSFER (OUT)";
+    default:
+      return code || "";
+  }
+}
+
+// Convert a UTC timestamp string to a Date restricted to the local timezone.
 function toLocalInputValue(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -40,8 +75,23 @@ function timestampToLocalInputValue(timestamp: string): string {
   return "";
 }
 
+const FIAT_ASSET_SYMBOLS = new Set(["EUR", "USD", "CHF", "GBP"]);
+
+function isFiatAssetSymbol(symbol: string | null | undefined): boolean {
+  if (!symbol) return false;
+  return FIAT_ASSET_SYMBOLS.has(symbol.toUpperCase());
+}
+
+
 function isTaxRelevant(tx: Transaction): boolean {
   const t = (tx.tx_type || "").trim().toUpperCase();
+  const asset = (tx.asset_symbol || "").trim().toUpperCase();
+
+  // Treat obvious fiat currencies as non-taxable holdings
+  if (asset === "EUR" || asset === "USD") {
+    return false;
+  }
+
   return t === "BUY" || t === "AIRDROP" || t === "STAKING_REWARD";
 }
 
@@ -69,6 +119,43 @@ const App: React.FC = () => {
     () => createPortfolioDataSource(auth.mode),
     [auth.mode]
   );
+
+  const [activeProfile, setActiveProfile] = useState<ProfileSummary | null>(null);
+  const [profileOverview, setProfileOverview] = useState<ProfileOverview | null>(null);
+
+  const [profileNameInput, setProfileNameInput] = useState("");
+  const [profilePinInput, setProfilePinInput] = useState("");
+  const [profilePinConfirmInput, setProfilePinConfirmInput] = useState("");
+  const [profileSetupError, setProfileSetupError] = useState<string | null>(null);
+
+  const [loginProfileId, setLoginProfileId] = useState<string | null>(null);
+  const [loginPinInput, setLoginPinInput] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [isProfileLoginOverlayOpen, setIsProfileLoginOverlayOpen] = useState(false);
+
+  const [isCreateProfileOverlayOpen, setIsCreateProfileOverlayOpen] = useState(false);
+  const [createProfileNameInput, setCreateProfileNameInput] = useState("");
+  const [createProfilePinInput, setCreateProfilePinInput] = useState("");
+  const [createProfilePinConfirmInput, setCreateProfilePinConfirmInput] = useState("");
+  const [createProfileError, setCreateProfileError] = useState<string | null>(null);
+
+  const [isRenameProfileOverlayOpen, setIsRenameProfileOverlayOpen] = useState(false);
+  const [renameProfileNameInput, setRenameProfileNameInput] = useState("");
+  const [renameProfileError, setRenameProfileError] = useState<string | null>(null);
+
+  const [isPinChangeOverlayOpen, setIsPinChangeOverlayOpen] = useState(false);
+  const [pinChangeCurrentPinInput, setPinChangeCurrentPinInput] = useState("");
+  const [pinChangeNewPinInput, setPinChangeNewPinInput] = useState("");
+  const [pinChangeNewPinConfirmInput, setPinChangeNewPinConfirmInput] = useState("");
+  const [pinChangeError, setPinChangeError] = useState<string | null>(null);
+
+  const profileDropdownRef = useRef<HTMLDivElement | null>(null);
+  const [isProfileMenuOverlayOpen, setIsProfileMenuOverlayOpen] = useState(false);
+
+  const [showProfileDeleteConfirmation, setShowProfileDeleteConfirmation] = useState(false);
+  const [profileDeleteConfirmInput, setProfileDeleteConfirmInput] = useState("");
+  const [profileDeletePinInput, setProfileDeletePinInput] = useState("");
+  const [profileDeleteError, setProfileDeleteError] = useState<string | null>(null);
   const [lang, setLang] = useState<Language>(() => {
     if (typeof window !== "undefined") {
       try {
@@ -91,14 +178,17 @@ const App: React.FC = () => {
   );
   const [fxRateEurUsd, setFxRateEurUsd] = useState<number | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const displayHoldings = holdings.filter((h) => !isFiatAssetSymbol(h.asset_symbol));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-const [txFilterYear, setTxFilterYear] = useState<string>("");
-const [txFilterAsset, setTxFilterAsset] = useState<string>("");
-const [txFilterType, setTxFilterType] = useState<string>("");
+  const [txFilterYear, setTxFilterYear] = useState<string>("");
+  const [txFilterAsset, setTxFilterAsset] = useState<string>("");
+  const [txFilterType, setTxFilterType] = useState<string>("");
   const [txSearch, setTxSearch] = useState<string>("");
   const [txPage, setTxPage] = useState(1);
   const [txPageSize, setTxPageSize] = useState(25);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isSettingsDirty, setIsSettingsDirty] = useState(false);
   const filteredTransactions = React.useMemo(
     () => {
       const filtered = transactions.filter((tx) => {
@@ -168,7 +258,25 @@ const [txFilterType, setTxFilterType] = useState<string>("");
   );
 
   const [csvImporting, setCsvImporting] = useState(false);
-    useEffect(() => {
+  const [externalImportSource, setExternalImportSource] = useState<string>("binance_trade_xlsx");
+  const [externalImporting, setExternalImporting] = useState(false);
+  const [externalImportResult, setExternalImportResult] = useState<CsvImportResult | null>(null);
+  const [externalFileName, setExternalFileName] = useState<string | null>(null);
+  const [showExternalImport, setShowExternalImport] = useState(false);
+  const [showTransactionForm, setShowTransactionForm] = useState(false);
+
+  
+  useEffect(() => {
+    const overview = getProfileOverview();
+    setProfileOverview(overview);
+    if (overview.profiles.length > 0 && !loginProfileId) {
+      setLoginProfileId(overview.profiles[0].id);
+    }
+    // We intentionally run this only once during initial mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+useEffect(() => {
     try {
       if (typeof window !== "undefined") {
         window.localStorage.setItem(LOCAL_STORAGE_LANG_KEY, lang);
@@ -178,7 +286,28 @@ const [txFilterType, setTxFilterType] = useState<string>("");
     }
   }, [lang]);
 
-const [csvResult, setCsvResult] = useState<CsvImportResult | null>(null);
+
+  useEffect(() => {
+    function handleGlobalPointerDown(event: MouseEvent | TouchEvent) {
+      if (!profileDropdownRef.current) return;
+      const target = event.target as Node | null;
+      if (target && profileDropdownRef.current.contains(target)) {
+        return;
+      }
+      setIsProfileMenuOverlayOpen(false);
+    }
+
+    if (isProfileMenuOverlayOpen) {
+      document.addEventListener("mousedown", handleGlobalPointerDown);
+      document.addEventListener("touchstart", handleGlobalPointerDown);
+    }
+
+    return () => {
+      document.removeEventListener("mousedown", handleGlobalPointerDown);
+      document.removeEventListener("touchstart", handleGlobalPointerDown);
+    };
+  }, [isProfileMenuOverlayOpen]);
+  const [csvResult, setCsvResult] = useState<CsvImportResult | null>(null);
   const [csvFileName, setCsvFileName] = useState<string | null>(null);
   const [showResetConfirmation, setShowResetConfirmation] = useState(false);
   const [resetConfirmationInput, setResetConfirmationInput] = useState("");
@@ -188,6 +317,8 @@ const [csvResult, setCsvResult] = useState<CsvImportResult | null>(null);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [expiring, setExpiring] = useState<ExpiringHolding[]>([]);
   const [holdingPeriodInput, setHoldingPeriodInput] = useState<string>("");
+  const [priceFetchEnabledInput, setPriceFetchEnabledInput] = useState<boolean>(true);
+  const [coingeckoApiKeyInput, setCoingeckoApiKeyInput] = useState<string>("");
 
   const [form, setForm] = useState({
     asset_symbol: "IOTA",
@@ -206,8 +337,26 @@ const [csvResult, setCsvResult] = useState<CsvImportResult | null>(null);
   useEffect(() => {
     if (config) {
       setHoldingPeriodInput(String(config.holding_period_days));
+      setPriceFetchEnabledInput(config.price_fetch_enabled !== false);
+      setCoingeckoApiKeyInput(config.coingecko_api_key ?? "");
     }
   }, [config]);
+
+  useEffect(() => {
+    if (!config) {
+      setIsSettingsDirty(false);
+      return;
+    }
+
+    const baseHolding = String(config.holding_period_days ?? DEFAULT_HOLDING_PERIOD_DAYS);
+    const baseApiKey = config.coingecko_api_key ?? "";
+
+    const holdingDirty =
+      holdingPeriodInput.length > 0 && holdingPeriodInput !== baseHolding;
+    const apiKeyDirty = coingeckoApiKeyInput !== baseApiKey;
+
+    setIsSettingsDirty(holdingDirty || apiKeyDirty);
+  }, [config, holdingPeriodInput, coingeckoApiKeyInput]);
 
 
   const dateTimeFormatter = React.useMemo(
@@ -256,10 +405,295 @@ const [csvResult, setCsvResult] = useState<CsvImportResult | null>(null);
   }
 };
 
+  const handleInitialProfileSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setProfileSetupError(null);
+
+    if (!profilePinInput || !profilePinConfirmInput) {
+      setProfileSetupError(lang === "de" ? "Bitte gib eine PIN ein." : "Please enter a PIN.");
+      return;
+    }
+    if (profilePinInput.length < 8) {
+      setProfileSetupError(
+        lang === "de"
+          ? "Die PIN muss mindestens 8 Zeichen lang sein."
+          : "The PIN must be at least 8 characters long.",
+      );
+      return;
+    }
+    if (profilePinInput !== profilePinConfirmInput) {
+      setProfileSetupError(lang === "de" ? "Die PINs stimmen nicht überein." : "The PIN entries do not match.");
+      return;
+    }
+
+    try {
+      const name = profileNameInput.trim() || (lang === "de" ? "Standard" : "Default");
+      const summary = await createInitialProfile(name, profilePinInput);
+      setActiveProfile(summary);
+      const overview = getProfileOverview();
+      setProfileOverview(overview);
+      setProfileNameInput("");
+      setProfilePinInput("");
+      setProfilePinConfirmInput("");
+      setProfileSetupError(null);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to create initial profile", err);
+      setProfileSetupError(
+        lang === "de"
+          ? "Das Profil konnte nicht erstellt werden. Bitte versuche es erneut."
+          : "Could not create profile. Please try again.",
+      );
+    }
+  };
+
+  const handleProfileLoginSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setLoginError(null);
+
+    if (!loginProfileId) {
+      setLoginError(lang === "de" ? "Bitte wähle ein Profil aus." : "Please select a profile.");
+      return;
+    }
+    if (!loginPinInput) {
+      setLoginError(lang === "de" ? "Bitte gib eine PIN ein." : "Please enter a PIN.");
+      return;
+    }
+
+    try {
+      const summary = await loginProfile(loginProfileId, loginPinInput);
+      setActiveProfile(summary);
+      const overview = getProfileOverview();
+      setProfileOverview(overview);
+      setLoginPinInput("");
+      setLoginError(null);
+      setIsProfileLoginOverlayOpen(false);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to log into profile", err);
+      setLoginError(lang === "de" ? "PIN ist ungültig." : "PIN is invalid.");
+    }
+  };
+
+  const handleCreateProfileSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setCreateProfileError(null);
+
+    if (!createProfilePinInput || !createProfilePinConfirmInput) {
+      setCreateProfileError(lang === "de" ? "Bitte gib eine PIN ein." : "Please enter a PIN.");
+      return;
+    }
+    if (createProfilePinInput.length < 8) {
+      setCreateProfileError(
+        lang === "de"
+          ? "Die PIN muss mindestens 8 Zeichen lang sein."
+          : "The PIN must be at least 8 characters long.",
+      );
+      return;
+    }
+    if (createProfilePinInput !== createProfilePinConfirmInput) {
+      setCreateProfileError(
+        lang === "de" ? "Die PINs stimmen nicht überein." : "The PIN entries do not match.",
+      );
+      return;
+    }
+
+    try {
+      const name = createProfileNameInput.trim() || (lang === "de" ? "Profil" : "Profile");
+      const summary = await createAdditionalProfile(name, createProfilePinInput);
+      setActiveProfile(summary);
+      const overview = getProfileOverview();
+      setProfileOverview(overview);
+      setCreateProfileNameInput("");
+      setCreateProfilePinInput("");
+      setCreateProfilePinConfirmInput("");
+      setIsCreateProfileOverlayOpen(false);
+      setCreateProfileError(null);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to create additional profile", err);
+      setCreateProfileError(
+        lang === "de"
+          ? "Das Profil konnte nicht erstellt werden. Bitte versuche es erneut."
+          : "Could not create profile. Please try again.",
+      );
+    }
+  };
+
+  const handleRenameProfileSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    setRenameProfileError(null);
+
+    if (!activeProfile) {
+      return;
+    }
+
+    const name = renameProfileNameInput.trim();
+    if (!name) {
+      setRenameProfileError(
+        lang === "de" ? "Der Profilname darf nicht leer sein." : "Profile name must not be empty.",
+      );
+      return;
+    }
+
+    try {
+      renameActiveProfile(name);
+      const updated = getActiveProfileSummary();
+      if (updated) {
+        setActiveProfile(updated);
+      }
+      const overview = getProfileOverview();
+      setProfileOverview(overview);
+      setIsRenameProfileOverlayOpen(false);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to rename profile", err);
+      setRenameProfileError(
+        lang === "de"
+          ? "Der Profilname konnte nicht geändert werden."
+          : "Could not rename profile.",
+      );
+    }
+  };
+
+  const handlePinChangeSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setPinChangeError(null);
+
+    if (!pinChangeCurrentPinInput) {
+      setPinChangeError(
+        lang === "de" ? "Bitte gib deine aktuelle PIN ein." : "Please enter your current PIN.",
+      );
+      return;
+    }
+
+    if (!pinChangeNewPinInput || !pinChangeNewPinConfirmInput) {
+      setPinChangeError(
+        lang === "de" ? "Bitte gib die neue PIN ein." : "Please enter the new PIN.",
+      );
+      return;
+    }
+
+    if (pinChangeNewPinInput.length < 8) {
+      setPinChangeError(
+        lang === "de"
+          ? "Die PIN muss mindestens 8 Zeichen lang sein."
+          : "The PIN must be at least 8 characters long.",
+      );
+      return;
+    }
+
+    if (pinChangeNewPinInput !== pinChangeNewPinConfirmInput) {
+      setPinChangeError(
+        lang === "de" ? "Die PINs stimmen nicht überein." : "The PIN entries do not match.",
+      );
+      return;
+    }
+
+    try {
+      await changeActiveProfilePin(pinChangeCurrentPinInput, pinChangeNewPinInput);
+      setPinChangeCurrentPinInput("");
+      setPinChangeNewPinInput("");
+      setPinChangeNewPinConfirmInput("");
+      setIsPinChangeOverlayOpen(false);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to change profile PIN", err);
+      setPinChangeError(
+        lang === "de"
+          ? "Die aktuelle PIN ist ungültig."
+          : "The current PIN is invalid.",
+      );
+    }
+  };
+
+  const handleResetProfileData = () => {
+    if (!activeProfile) {
+      return;
+    }
+    try {
+      resetActiveProfileData();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to reset profile data", err);
+    }
+    window.location.reload();
+  };
+
+  const handleDeleteProfile = async () => {
+    if (!activeProfile) {
+      return;
+    }
+    setProfileDeleteError(null);
+
+    if (profileDeleteConfirmInput !== "DELETE") {
+      return;
+    }
+
+    if (!profileDeletePinInput) {
+      setProfileDeleteError(lang === "de" ? "Bitte gib deine PIN ein." : "Please enter your PIN.");
+      return;
+    }
+
+    try {
+      const valid = await verifyActiveProfilePin(profileDeletePinInput);
+      if (!valid) {
+        setProfileDeleteError(lang === "de" ? "PIN ist ungültig." : "PIN is invalid.");
+        return;
+      }
+
+      deleteActiveProfile();
+      setProfileDeleteConfirmInput("");
+      setProfileDeletePinInput("");
+      setShowProfileDeleteConfirmation(false);
+
+      const overview = getProfileOverview();
+      setProfileOverview(overview);
+      setActiveProfile(null);
+
+      if (overview.profiles.length > 0) {
+        setLoginProfileId(overview.profiles[0].id);
+      } else {
+        setLoginProfileId(null);
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to delete profile", err);
+      setProfileDeleteError(
+        lang === "de"
+          ? "Das Profil konnte nicht gelöscht werden."
+          : "Could not delete profile.",
+      );
+    }
+
+  };
   useEffect(() => {
+    // Optimistically load local transactions and holdings from storage
+    // so that something is visible immediately while price/fiat enrichment
+    // is still running in the background.
+    if (auth.mode !== "local-only" || !activeProfile) {
+      return;
+    }
+    try {
+      const rawTxs = loadLocalTransactions();
+      setTransactions(rawTxs);
+      const holdingsResp = computeLocalHoldings(rawTxs);
+      setHoldings(holdingsResp.items ?? []);
+    } catch (err) {
+      console.error("Failed to optimistically load local data", err);
+    }
+    // We intentionally do not depend on functions here to avoid re-running
+    // this effect unnecessarily.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.mode, activeProfile?.id]);
+
+  useEffect(() => {
+    if (!activeProfile) {
+      return;
+    }
     fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auth.mode]);
+  }, [auth.mode, activeProfile?.id]);
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
@@ -312,11 +746,17 @@ const [csvResult, setCsvResult] = useState<CsvImportResult | null>(null);
     const amount = parsedAmount;
 
     let priceFiat: number | null = null;
+
+const upperTxType = (form.tx_type || "").toString().trim().toUpperCase();
+const isTransferTx =
+  upperTxType === "TRANSFER_IN" || upperTxType === "TRANSFER_OUT";
+const hasFiatCurrency =
+  typeof form.fiat_currency === "string" &&
+  form.fiat_currency.trim().length > 0;
+
 if (form.price_fiat) {
-  // User explicitly provided a price.
   priceFiat = parseFloat(form.price_fiat);
-} else {
-  // First try to resolve a historical price based on the transaction timestamp.
+} else if (!isTransferTx && hasFiatCurrency) {
   try {
     const hist = await fetchHistoricalPriceForSymbol(
       upperSymbol,
@@ -334,8 +774,6 @@ if (form.price_fiat) {
     console.warn("Failed to fetch historical price for transaction", err);
   }
 
-  // If we still have no price, fall back to the current price cache as a
-  // best-effort approximation.
   if (priceFiat == null) {
     const snapshot = getPriceCacheSnapshot();
     const cached = snapshot[upperSymbol];
@@ -366,6 +804,7 @@ const payload = {
 
     resetForm();
     await fetchData();
+    setShowTransactionForm(false);
   } catch (err) {
     console.error(err);
     setError(t(lang, "error_save_tx"));
@@ -408,6 +847,58 @@ const payload = {
   }
 };
 
+  const handleExternalFileChange = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setExternalFileName(file.name);
+    setExternalImportResult(null);
+    setError(null);
+    setExternalImporting(true);
+
+    try {
+      if (externalImportSource === "binance_trade_xlsx") {
+        const importer = dataSource.importBinanceSpotXlsx?.bind(dataSource);
+        if (!importer) {
+          setExternalImportResult({
+            imported: 0,
+            errors: [t(lang, "external_import_not_supported")],
+          });
+        } else {
+          const json = await importer(lang, file);
+          setExternalImportResult(json);
+          await fetchData();
+        }
+      } else if (externalImportSource === "bitpanda_csv") {
+        const importer = dataSource.importBitpandaCsv?.bind(dataSource);
+        if (!importer) {
+          setExternalImportResult({
+            imported: 0,
+            errors: [t(lang, "external_import_not_supported")],
+          });
+        } else {
+          const json = await importer(lang, file);
+          setExternalImportResult(json);
+          await fetchData();
+        }
+      } else {
+        setExternalImportResult({
+          imported: 0,
+          errors: [t(lang, "external_import_not_supported")],
+        });
+      }
+    } catch (err) {
+      console.error(err);
+      setError(t(lang, "error_external_import"));
+    } finally {
+      setExternalImporting(false);
+      e.target.value = "";
+    }
+  };
+
+
 const handleExportCsv = () => {
   if (!transactions || transactions.length === 0) {
     return;
@@ -420,11 +911,15 @@ const handleExportCsv = () => {
     "timestamp",
     "price_fiat",
     "fiat_currency",
+    "fiat_value",
+    "value_eur",
+    "value_usd",
     "source",
     "note",
     "tx_id",
     CSV_SCHEMA_VERSION_COLUMN,
     "holding_period_days",
+    "base_currency",
   ];
 
   const rows = transactions.map((tx) => [
@@ -434,11 +929,15 @@ const handleExportCsv = () => {
     tx.timestamp ?? "",
     tx.price_fiat != null ? String(tx.price_fiat) : "",
     tx.fiat_currency ?? "",
+    tx.fiat_value != null ? String(tx.fiat_value) : "",
+    tx.value_eur != null ? String(tx.value_eur) : "",
+    tx.value_usd != null ? String(tx.value_usd) : "",
     tx.source ?? "",
     tx.note ?? "",
     tx.tx_id ?? "",
     String(CURRENT_CSV_SCHEMA_VERSION),
     String(config?.holding_period_days ?? DEFAULT_HOLDING_PERIOD_DAYS),
+    config?.base_currency ?? "EUR",
   ]);
 
   const escapeCell = (value: string) => `"${value.replace(/"/g, '""')}"`;
@@ -453,14 +952,24 @@ const handleExportCsv = () => {
   const url = window.URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
+  const profileName = activeProfile?.name || "profile";
+  const profileSlug =
+    profileName.trim().replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "") ||
+    "profile";
   const stamp = new Date().toISOString().slice(0, 10);
-  a.download = `eigenfolio-transactions-${stamp}.csv`;
+  a.download = `Traeky_${profileSlug}_${stamp}.csv`;
   document.body.appendChild(a);
   a.click();
   a.remove();
   window.URL.revokeObjectURL(url);
 };
-const handleSaveHoldingConfig = () => {
+  const handleCloseExternalImport = () => {
+    setShowExternalImport(false);
+    setExternalImportResult(null);
+    setExternalFileName(null);
+  };
+
+  const handleSaveHoldingConfig = () => {
   if (!config) {
     return;
   }
@@ -480,6 +989,9 @@ const handleSaveHoldingConfig = () => {
     holding_period_days: parsed,
     upcoming_holding_window_days:
       config.upcoming_holding_window_days ?? DEFAULT_UPCOMING_WINDOW_DAYS,
+    base_currency: config.base_currency ?? "EUR",
+    price_fetch_enabled: config.price_fetch_enabled !== false,
+    coingecko_api_key: config.coingecko_api_key ?? null,
   };
 
   setConfig(nextConfig);
@@ -490,12 +1002,43 @@ const handleSaveHoldingConfig = () => {
     setExpiring(expiringNext);
   }
 };
+
+
+  const handleSavePriceSettings = () => {
+    if (!config) {
+      return;
+    }
+
+    const nextConfig: AppConfig = {
+      holding_period_days:
+        config.holding_period_days ?? DEFAULT_HOLDING_PERIOD_DAYS,
+      upcoming_holding_window_days:
+        config.upcoming_holding_window_days ?? DEFAULT_UPCOMING_WINDOW_DAYS,
+      base_currency: config.base_currency ?? "EUR",
+      price_fetch_enabled: priceFetchEnabledInput,
+      coingecko_api_key:
+        coingeckoApiKeyInput.trim().length > 0
+          ? coingeckoApiKeyInput.trim()
+          : null,
+    };
+
+    setConfig(nextConfig);
+
+    if (auth.mode === "local-only") {
+      saveLocalAppConfig(nextConfig);
+      const expiringNext = computeLocalExpiring(transactions, nextConfig);
+      setExpiring(expiringNext);
+    }
+  };
 
 const handleResetHoldingConfigToDefault = () => {
   const nextConfig: AppConfig = {
     holding_period_days: DEFAULT_HOLDING_PERIOD_DAYS,
     upcoming_holding_window_days:
       config?.upcoming_holding_window_days ?? DEFAULT_UPCOMING_WINDOW_DAYS,
+    base_currency: config?.base_currency ?? "EUR",
+    price_fetch_enabled: config?.price_fetch_enabled !== false,
+    coingecko_api_key: config?.coingecko_api_key ?? null,
   };
 
   setConfig(nextConfig);
@@ -506,6 +1049,32 @@ const handleResetHoldingConfigToDefault = () => {
     setExpiring(expiringNext);
   }
 };
+
+  const handleTogglePriceFetchEnabled = (nextEnabled: boolean) => {
+    setPriceFetchEnabledInput(nextEnabled);
+
+    if (!config) {
+      return;
+    }
+
+    const nextConfig: AppConfig = {
+      holding_period_days:
+        config.holding_period_days ?? DEFAULT_HOLDING_PERIOD_DAYS,
+      upcoming_holding_window_days:
+        config.upcoming_holding_window_days ?? DEFAULT_UPCOMING_WINDOW_DAYS,
+      base_currency: config.base_currency ?? "EUR",
+      price_fetch_enabled: nextEnabled,
+      coingecko_api_key: config.coingecko_api_key ?? null,
+    };
+
+    setConfig(nextConfig);
+
+    if (auth.mode === "local-only") {
+      saveLocalAppConfig(nextConfig);
+      const expiringNext = computeLocalExpiring(transactions, nextConfig);
+      setExpiring(expiringNext);
+    }
+  };
 
   const handleExportPdf = async () => {
   try {
@@ -513,7 +1082,12 @@ const handleResetHoldingConfigToDefault = () => {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "crypto-transactions.pdf";
+    const profileName = activeProfile?.name || "profile";
+    const profileSlug =
+      profileName.trim().replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "") ||
+      "profile";
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.download = `Traeky_${profileSlug}_${stamp}.pdf`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -527,11 +1101,15 @@ const handleReloadHoldingPrices = async () => {
   if (!holdings || holdings.length === 0) {
     return;
   }
+  if (!config || config.price_fetch_enabled === false) {
+    return;
+  }
   if (pricesRefreshing) {
     return;
   }
   setPricesRefreshing(true);
   try {
+    setCoingeckoApiKey(config.coingecko_api_key ?? null);
     const resp: HoldingsResponse = {
       items: holdings,
       portfolio_value_eur: null,
@@ -544,7 +1122,6 @@ const handleReloadHoldingPrices = async () => {
     setHoldingsPortfolioEur(updated.portfolio_value_eur ?? null);
     setHoldingsPortfolioUsd(updated.portfolio_value_usd ?? null);
     setFxRateEurUsd(updated.fx_rate_eur_usd ?? null);
-    setFxRateUsdEur(updated.fx_rate_usd_eur ?? null);
   } catch (err) {
     console.error("Failed to reload holding prices", err);
   } finally {
@@ -579,7 +1156,7 @@ const handleDownloadEncryptedBackup = async () => {
     const a = document.createElement("a");
     const stamp = new Date().toISOString().slice(0, 10);
     a.href = url;
-    a.download = `eigenfolio-cloud-backup-${stamp}.json`;
+    a.download = `traeky-cloud-backup-${stamp}.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -638,6 +1215,11 @@ const handleRestoreEncryptedBackup = async () => {
             rawConfig.upcoming_holding_window_days > 0
               ? rawConfig.upcoming_holding_window_days
               : DEFAULT_UPCOMING_WINDOW_DAYS,
+          base_currency:
+            typeof rawConfig.base_currency === "string" &&
+            (rawConfig.base_currency === "EUR" || rawConfig.base_currency === "USD")
+              ? rawConfig.base_currency
+              : "EUR",
         };
 
         const normalized: Transaction[] = snapshot.transactions
@@ -803,6 +1385,11 @@ const handleRestoreEncryptedBackup = async () => {
           rawConfig.upcoming_holding_window_days > 0
             ? rawConfig.upcoming_holding_window_days
             : DEFAULT_UPCOMING_WINDOW_DAYS,
+        base_currency:
+          typeof rawConfig.base_currency === "string" &&
+          (rawConfig.base_currency === "EUR" || rawConfig.base_currency === "USD")
+            ? rawConfig.base_currency
+            : "EUR",
       };
 
       const normalized: Transaction[] = snapshot.transactions
@@ -924,300 +1511,141 @@ const handleRestoreEncryptedBackup = async () => {
 
   return (
     <div className="layout">
-      <aside className="sidebar">
-        <div className="sidebar-header">
-          <div>
-            <h1 className="logo">
-            {t(lang, "app_title")}
-            <span className="logo-version">v{APP_VERSION}</span>
-          </h1>
-          <p className="sidebar-sub">{t(lang, "app_subtitle")}</p>
-          </div>
-          <div className="lang-switch form-row">
-          <label>{lang === "de" ? "Sprache" : "Language"}</label>
-          <select
-            className="lang-select"
-            value={lang}
-            onChange={(e) => setLang(e.target.value as Language)}
-            aria-label={lang === "de" ? "Sprache auswählen" : "Select language"}
-          >
-            <option value="en">🇬🇧 English</option>
-            <option value="de">🇩🇪 Deutsch</option>
-          </select>
-        </div>
-        </div>
-
-        <div className="sidebar-section">
-          <h2>{t(lang, "tips_title")}</h2>
-          <ul>
-            <li>{t(lang, "tips_line1")}</li>
-            <li>{t(lang, "tips_line2")}</li>
-            <li>{t(lang, "tips_line3")}</li>
-            <li>
-              {t(lang, "tips_line4_prefix")} <b>{holdingDays}</b>{" "}
-              {t(lang, "tips_line4_suffix")}{" "}</li>
-          </ul>
-        </div>
-
-        <div className="sidebar-section">
-          <h2>{t(lang, "csv_title")}</h2>
-          <p className="muted">
-            {t(lang, "csv_expected")}
-            <br />
-            {t(lang, "csv_required")}
-          </p>
-          <p className="muted">
-            {t(lang, "csv_version_info")}
-            <br />
-            {t(lang, "csv_dedup_info")}
-          </p>
-          <div className="form-row file-row" style={{ marginTop: "0.5rem" }}>
-            <label>CSV</label>
-            <div className="file-input-wrapper">
-              <input
-                id="csv-file"
-                type="file"
-                accept=".csv,text/csv"
-                onChange={handleCsvChange}
-                disabled={csvImporting}
-              />
-              <span className="file-name">
-                {csvFileName || t(lang, "csv_no_file")}
-              </span>
-            </div>
-          </div>
-          {csvImporting && <p className="muted">{t(lang, "csv_running")}</p>}
-          {csvResult && (
-            <div className="csv-result">
-              <p className="muted">
-                {t(lang, "csv_result_prefix")}: {csvResult.imported}
-              </p>
-              {csvResult.errors && csvResult.errors.length > 0 && (
-                <div className="csv-errors">
-                  <p className="muted">
-                    {t(lang, "csv_result_errors_title")}
+      {profileOverview &&
+        (profileOverview.profiles.length === 0 ||
+          (profileOverview.profiles.length > 0 && (!activeProfile || isProfileLoginOverlayOpen))) && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            {profileOverview.profiles.length === 0 ? (
+              <>
+                <h2>{t(lang, "profile_setup_title")}</h2>
+                <p className="muted">{t(lang, "profile_setup_description")}</p>
+                {profileOverview.hasLegacyData && (
+                  <p className="muted" style={{ marginTop: "0.5rem" }}>
+                    {t(lang, "profile_setup_description_migrate")}
                   </p>
-                  <ul>
-                    {csvResult.errors.map((err, index) => (
-                      <li key={index}>{err}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
-
-          <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-            <button
-              type="button"
-              className="btn-secondary export-button"
-              onClick={handleExportCsv}
-              disabled={transactions.length === 0}
-            >
-              {t(lang, "csv_export_button")}
-            </button>
-            <button
-              type="button"
-              className="btn-secondary export-button"
-              onClick={handleExportPdf}
-            >
-              {t(lang, "action_export_pdf")}
-            </button>
-          </div>
-        </div>
-
-        
-        <div className="sidebar-section">
-          <h2>{t(lang, "holding_config_title")}</h2>
-          <p className="muted">
-            {t(lang, "holding_config_description")}
-          </p>
-          <div className="form-row" style={{ marginTop: "0.5rem" }}>
-            <label>{t(lang, "holding_config_days_label")}</label>
-            <input
-              type="number"
-              min={0}
-              step={1}
-              value={holdingPeriodInput}
-              onChange={(e) => {
-                const next = e.target.value;
-                if (/^\d*$/.test(next)) {
-                  setHoldingPeriodInput(next);
-                }
-              }}
-            />
-          </div>
-          <p className="muted" style={{ fontSize: "0.75rem", marginTop: "0.25rem" }}>
-            {t(lang, "holding_config_hint")}
-          </p>
-          <div style={{ marginTop: "0.5rem", display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={handleResetHoldingConfigToDefault}
-            >
-              {t(lang, "holding_config_reset_button")}
-            </button>
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={handleSaveHoldingConfig}
-              disabled={!holdingPeriodInput.length || !config}
-            >
-              {t(lang, "holding_config_save_button")}
-            </button>
-          </div>
-        </div>
-
-<div className="sidebar-section">
-          <h2>{t(lang, "encryption_section_title")}</h2>
-          <p className="muted">
-            {auth.mode === "local-only"
-              ? t(lang, "encryption_local_only")
-              : t(lang, "encryption_cloud_demo")}
-          </p>
-          <p className="muted">
-            {t(lang, "encryption_key_hint")}
-          </p>
-        </div>
-        {auth.mode === "cloud" && (
-          <div className="sidebar-section">
-            <h2>{t(lang, "cloud_backup_section_title")}</h2>
-            <p className="muted">{t(lang, "cloud_backup_section_info")}</p>
-            <p className="muted">{t(lang, "cloud_backup_prices_info")}</p>
-            <div className="sidebar-actions-vertical">
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={handleDownloadEncryptedBackup}
-              >
-                {t(lang, "cloud_backup_export_button")}
-              </button>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={handleRestoreEncryptedBackup}
-              >
-                {t(lang, "cloud_backup_import_button")}
-              </button>
-            </div>
-
-                    <p className="muted">
-              {t(lang, "cloud_backup_import_info")}
-            </p>
-            <div className="sidebar-subsection" style={{ marginTop: "1rem" }}>
-              <h3 className="sidebar-subtitle">
-                {t(lang, "cloud_sync_preview_title")}
-              </h3>
-              <p className="muted">
-                {t(lang, "cloud_sync_preview_info")}
-              </p>
-              <div className="sidebar-actions-vertical">
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={handleCloudSyncPush}
-                  disabled={!cloudClient}
+                )}
+                {profileSetupError && (
+                  <p className="error-text modal-error">{profileSetupError}</p>
+                )}
+                <form
+                  onSubmit={handleInitialProfileSubmit}
+                  style={{ marginTop: "1rem" }}
                 >
-                  {t(lang, "cloud_sync_push_button")}
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={handleCloudSyncPull}
-                  disabled={!cloudClient}
-                >
-                  {t(lang, "cloud_sync_pull_button")}
-                </button>
-              </div>
-              {!cloudClient && (
-                <p className="muted">
-                  {t(lang, "cloud_sync_client_missing_info")}
-                </p>
-              )}
-            </div>
-          </div>
-        )}
-        {auth.mode === "local-only" && (
-          <>
-            <div className="sidebar-section">
-              <h2>{t(lang, "local_mode_title")}</h2>
-              <p className="muted">{t(lang, "local_mode_notice")}</p>
-            </div>
-
-            <div className="sidebar-section">
-              <h2>{t(lang, "reset_local_title")}</h2>
-              <p className="muted">{t(lang, "reset_local_description")}</p>
-              {showResetConfirmation ? (
-                <div className="reset-confirm">
-                  <p className="muted">
-                    {t(lang, "reset_local_confirm_hint")} <code>{RESET_CONFIRMATION_WORD}</code>
-                  </p>
-                  <div className="form-row" style={{ marginTop: "0.5rem" }}>
-                    <input
-                      type="text"
-                      value={resetConfirmationInput}
-                      onChange={(e) => setResetConfirmationInput(e.target.value)}
-                      placeholder={RESET_CONFIRMATION_WORD}
-                    />
+                  <div className="form-row">
+                    <label className="form-label">
+                      <span className="form-label-text">{t(lang, "profile_name_label")}</span>
+                      <input
+                        type="text"
+                        className="input"
+                        value={profileNameInput}
+                        onChange={(e) => setProfileNameInput(e.target.value)}
+                        placeholder={t(lang, "profile_name_placeholder")}
+                      />
+                    </label>
                   </div>
-                  <div className="reset-actions">
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => {
-                        setShowResetConfirmation(false);
-                        setResetConfirmationInput("");
-                      }}
-                    >
-                      {t(lang, "reset_local_cancel")}
+                  <div className="form-row">
+                    <label className="form-label">
+                      <span className="form-label-text">{t(lang, "profile_pin_label")}</span>
+                      <input
+                        type="password"
+                        className="input"
+                        value={profilePinInput}
+                        onChange={(e) => setProfilePinInput(e.target.value)}
+                        autoComplete="new-password"
+                      />
+                    </label>
+                    <p className="muted">{t(lang, "profile_pin_hint")}</p>
+                  </div>
+                  <div className="form-row">
+                    <label className="form-label">
+                      <span className="form-label-text">{t(lang, "profile_pin_confirm_label")}</span>
+                      <input
+                        type="password"
+                        className="input"
+                        value={profilePinConfirmInput}
+                        onChange={(e) => setProfilePinConfirmInput(e.target.value)}
+                        autoComplete="new-password"
+                      />
+                    </label>
+                  </div>
+                  <div className="modal-actions">
+                    <button type="submit" className="btn-primary">
+                      {t(lang, "profile_setup_submit")}
                     </button>
-                    <button
-                      type="button"
-                      className="btn-danger"
-                      disabled={resetConfirmationInput !== RESET_CONFIRMATION_WORD}
-                      onClick={() => {
-                        try {
-                          window.localStorage.clear();
-                        } catch (err) {
-                          console.error("Failed to clear localStorage", err);
+                  </div>
+                </form>
+              </>
+            ) : (
+              <>
+                <h2>{t(lang, "profile_login_title")}</h2>
+                <p className="muted">{t(lang, "profile_login_description")}</p>
+                {loginError && <p className="error-text modal-error">{loginError}</p>}
+                <form
+                  onSubmit={handleProfileLoginSubmit}
+                  style={{ marginTop: "1rem" }}
+                >
+                  <div className="form-row">
+                    <label className="form-label">
+                      <span className="form-label-text">{t(lang, "profile_login_select_label")}</span>
+                      <select
+                        className="input"
+                        value={loginProfileId ?? ""}
+                        onChange={(e) =>
+                          setLoginProfileId(e.target.value ? e.target.value : null)
                         }
-                        window.location.reload();
-                      }}
-                    >
-                      {t(lang, "reset_local_confirm_button")}
+                      >
+                        <option value="">
+                          {lang === "de"
+                            ? "Profil auswählen…"
+                            : "Select a profile…"}
+                        </option>
+                        {profileOverview.profiles.map((profile) => (
+                          <option key={profile.id} value={profile.id}>
+                            {profile.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="form-row">
+                    <label className="form-label">
+                      <span className="form-label-text">{t(lang, "profile_login_pin_label")}</span>
+                      <input
+                        type="password"
+                        className="input"
+                        value={loginPinInput}
+                        onChange={(e) => setLoginPinInput(e.target.value)}
+                        autoComplete="current-password"
+                      />
+                    </label>
+                  </div>
+                  <div className="modal-actions">
+                    {activeProfile && (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => {
+                          setIsProfileLoginOverlayOpen(false);
+                          setLoginPinInput("");
+                          setLoginError(null);
+                        }}
+                      >
+                        {t(lang, "form_cancel")}
+                      </button>
+                    )}
+                    <button type="submit" className="btn-primary">
+                      {t(lang, "profile_login_submit")}
                     </button>
                   </div>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  className="btn-danger"
-                  onClick={() => {
-                    setShowResetConfirmation(true);
-                    setResetConfirmationInput("");
-                  }}
-                >
-                  {t(lang, "reset_local_button_label")}
-                </button>
-              )}
-            </div>
-          </>
-        )}
+                </form>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
-<div className="sidebar-footer">
-  <p>
-    <span>{t(lang, "footer_copyright_prefix")} </span>
-    <a
-      href="https://github.com/pandabytelabs/eigenfolio"
-      target="_blank"
-      rel="noreferrer"
-    >
-      {t(lang, "footer_copyright_brand")}
-    </a>
-  </p>
-</div>
-</aside>
+      
 
       
         {CLOUD_CONNECT_ENABLED && isAuthModalOpen && (
@@ -1259,10 +1687,481 @@ const handleRestoreEncryptedBackup = async () => {
             </div>
           </div>
         )}
+
+      {isSettingsOpen && (
+        <div
+          className="settings-overlay-backdrop"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setIsSettingsOpen(false);
+            }
+          }}
+        >
+          <div className="settings-overlay" role="dialog" aria-modal="true">
+            <section className="settings-section" id="settings-section">
+
+        <div className="settings-header-row">
+          <div className="settings-header-text">
+            <h2 className="settings-section-title">
+              {lang === "de" ? "Einstellungen" : "Settings"}
+            </h2>
+            <p className="muted">
+              {lang === "de"
+                ? "Verwalte Sprache, Fiat-Währung, CSV-Import und -Export, Haltefrist, Preisabfrage und lokale Daten."
+                : "Manage language, fiat currency, CSV import and export, holding period, price fetching and local data."}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="settings-close-icon"
+            onClick={() => setIsSettingsOpen(false)}
+            aria-label={lang === "de" ? "Einstellungen schließen" : "Close settings"}
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="settings-grid">
+<div className="card settings-card">
+<div className="sidebar-section">
+          <h2>{lang === "de" ? "Sprache" : "Language"}</h2>
+          <div className="lang-switch form-row">
+            <select
+              className="lang-select"
+              value={lang}
+              onChange={(e) => setLang(e.target.value as Language)}
+              aria-label={lang === "de" ? "Sprache auswählen" : "Select language"}
+            >
+              <option value="en">🇬🇧 English</option>
+              <option value="de">🇩🇪 Deutsch</option>
+            </select>
+            <p className="muted settings-field-help">
+              {t(lang, "settings_language_info")}
+            </p>
+          </div>
+        </div>
+          </div>
+          <div className="card settings-card">
+<div className="sidebar-section">
+          <h2>{t(lang, "base_currency_title")}</h2>
+          <div className="form-row">
+            <label>{t(lang, "base_currency_label")}</label>
+            <select
+              value={config?.base_currency ?? "EUR"}
+              onChange={(e) => {
+                const value = e.target.value === "USD" ? "USD" : "EUR";
+                const nextConfig: AppConfig = {
+                  holding_period_days:
+                    config?.holding_period_days ?? DEFAULT_HOLDING_PERIOD_DAYS,
+                  upcoming_holding_window_days:
+                    config?.upcoming_holding_window_days ?? DEFAULT_UPCOMING_WINDOW_DAYS,
+                  base_currency: value,
+                  price_fetch_enabled: config?.price_fetch_enabled !== false,
+                  coingecko_api_key: config?.coingecko_api_key ?? null,
+                };
+
+                setConfig(nextConfig);
+
+                if (auth.mode === "local-only") {
+                  saveLocalAppConfig(nextConfig);
+                  const expiringNext = computeLocalExpiring(transactions, nextConfig);
+                  setExpiring(expiringNext);
+                }
+              }}
+            >
+              <option value="EUR">EUR</option>
+              <option value="USD">USD</option>
+            </select>
+            <p className="muted">{t(lang, "base_currency_hint")}</p>
+          </div>
+        </div>
+
+        
+          </div>
+          <div className="card settings-card">
+<div className="sidebar-section">
+          <h2>{t(lang, "holding_config_title")}</h2>
+          <p className="muted">
+            {t(lang, "holding_config_description")}
+          </p>
+          <div className="form-row" style={{ marginTop: "0.5rem" }}>
+            <label>{t(lang, "holding_config_days_label")}</label>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={holdingPeriodInput}
+              onChange={(e) => {
+                const next = e.target.value;
+                if (/^\d*$/.test(next)) {
+                  setHoldingPeriodInput(next);
+                }
+              }}
+            />
+          </div>
+          <p className="muted" style={{ fontSize: "0.75rem", marginTop: "0.25rem" }}>
+            {t(lang, "holding_config_hint")}
+          </p>
+          <div style={{ marginTop: "0.5rem", display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "center" }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleResetHoldingConfigToDefault}
+            >
+              {t(lang, "holding_config_reset_button")}
+            </button>
+          </div>
+        </div>
+
+        
+          </div>
+          <div className="card settings-card">
+<div className="sidebar-section">
+          <h2>{t(lang, "price_config_section_title")}</h2>
+          <p className="muted">
+            {t(lang, "price_config_description")}
+          </p>
+          <div className="form-row" style={{ marginTop: "0.5rem" }}>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "0.5rem",
+              }}
+            >
+              <span>{t(lang, "price_config_enable_label")}</span>
+              <span
+                style={{
+                  position: "relative",
+                  display: "inline-block",
+                  width: "40px",
+                  height: "20px",
+                  borderRadius: "999px",
+                  backgroundColor: priceFetchEnabledInput ? "#22c55e" : "#cbd5e1",
+                  transition: "background-color 0.2s ease",
+                  cursor: "pointer",
+                }}
+                onClick={() => {
+                  handleTogglePriceFetchEnabled(!priceFetchEnabledInput);
+                }}
+              >
+                <span
+                  style={{
+                    position: "absolute",
+                    top: "2px",
+                    left: priceFetchEnabledInput ? "22px" : "2px",
+                    width: "16px",
+                    height: "16px",
+                    borderRadius: "999px",
+                    backgroundColor: "#ffffff",
+                    boxShadow: "0 1px 2px rgba(0, 0, 0, 0.25)",
+                    transition: "left 0.2s ease",
+                  }}
+                />
+                <input
+                  type="checkbox"
+                  checked={priceFetchEnabledInput}
+                  onChange={(e) => {
+                    handleTogglePriceFetchEnabled(e.target.checked);
+                  }}
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    opacity: 0,
+                    margin: 0,
+                    cursor: "pointer",
+                  }}
+                />
+              </span>
+            </label>
+          </div>
+          <div className="form-row" style={{ marginTop: "0.5rem" }}>
+            <label>{t(lang, "price_config_api_key_label")}</label>
+            <input
+              type="text"
+              value={coingeckoApiKeyInput}
+              onChange={(e) => {
+                setCoingeckoApiKeyInput(e.target.value);
+              }}
+              placeholder="CoinGecko API key (optional)"
+            />
+            <p className="muted" style={{ fontSize: "0.75rem", marginTop: "0.25rem" }}>
+              {t(lang, "price_config_api_key_hint")}
+            </p>
+            {config && config.price_fetch_enabled !== false && getPriceApiStatus().hasError && (
+              <p className="muted" style={{ fontSize: "0.75rem", marginTop: "0.25rem" }}>
+                {t(lang, "price_config_api_warning")}
+              </p>
+            )}
+          </div>
+        </div>
+
+
+          </div>
+          <div className="card settings-card">
+<div className="sidebar-section">
+          <h2>{t(lang, "csv_title")}</h2>
+          <p className="muted">
+            {t(lang, "csv_expected")}
+            <br />
+            {t(lang, "csv_required")}
+          </p>
+          <p className="muted">
+            {t(lang, "csv_version_info")}
+            <br />
+            {t(lang, "csv_dedup_info")}
+          </p>
+          <div className="form-row file-row" style={{ marginTop: "0.5rem" }}>
+            <div className="file-row-main">
+              <input
+                id="csv-file"
+                type="file"
+                accept=".csv,text/csv"
+                onChange={handleCsvChange}
+                disabled={csvImporting}
+                style={{ display: "none" }}
+              />
+              <button
+                type="button"
+                className="btn-secondary export-button"
+                onClick={() => {
+                  const input = document.getElementById("csv-file") as HTMLInputElement | null;
+                  if (input && !input.disabled) {
+                    input.click();
+                  }
+                }}
+              >
+                {t(lang, "csv_import_button")}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary export-button"
+                onClick={handleExportCsv}
+                disabled={transactions.length === 0}
+              >
+                {t(lang, "csv_export_button")}
+              </button>
+            </div>
+            {csvFileName && (
+              <span className="file-name">{csvFileName}</span>
+            )}
+          </div>
+          {csvImporting && (
+            <>
+              <p className="muted">{t(lang, "csv_running")}</p>
+              <progress />
+            </>
+          )}
+          {csvResult && (
+            <div className="csv-result">
+              <p className="muted">
+                {t(lang, "csv_result_prefix")} {csvResult.imported}
+              </p>
+              {csvResult.errors && csvResult.errors.length > 0 && (
+                <div className="csv-errors">
+                  <p className="muted">
+                    {t(lang, "csv_result_errors_title")}
+                  </p>
+                  <ul>
+                    {csvResult.errors.map((err, index) => (
+                      <li key={index}>{err}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
+        </div>
+
+        
+        
+          </div>
+
+ 
+         <div className="card settings-card">
+            <div className="sidebar-section">
+              <h2>{t(lang, "reset_local_title")}</h2>
+              <p className="muted">{t(lang, "reset_local_description")}</p>
+              {activeProfile ? (
+                <>
+                  {showResetConfirmation ? (
+                    <div className="reset-confirm">
+                      <p className="muted">
+                        {t(lang, "reset_local_confirm_hint")} <code>{RESET_CONFIRMATION_WORD}</code>
+                      </p>
+                      <div className="form-row" style={{ marginTop: "0.5rem" }}>
+                        <input
+                          type="text"
+                          value={resetConfirmationInput}
+                          onChange={(e) => setResetConfirmationInput(e.target.value)}
+                          placeholder={RESET_CONFIRMATION_WORD}
+                        />
+                      </div>
+                      <div className="reset-actions">
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => {
+                            setShowResetConfirmation(false);
+                            setResetConfirmationInput("");
+                          }}
+                        >
+                          {t(lang, "reset_local_cancel")}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-danger"
+                          disabled={resetConfirmationInput !== RESET_CONFIRMATION_WORD}
+                          onClick={handleResetProfileData}
+                        >
+                          {t(lang, "reset_local_confirm_button")}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="reset-actions reset-actions-single">
+                      <button
+                        type="button"
+                        className="btn-danger"
+                        onClick={() => {
+                          setShowResetConfirmation(true);
+                          setResetConfirmationInput("");
+                        }}
+                      >
+                        {t(lang, "reset_local_button_label")}
+                      </button>
+                    </div>
+                  )}
+
+                  <hr style={{ margin: "1.5rem 0", borderColor: "rgba(148, 163, 184, 0.35)" }} />
+
+                  <h3 style={{ marginTop: 0 }}>
+                    {lang === "de" ? "Profil löschen" : "Delete profile"}
+                  </h3>
+                  <p className="muted">
+                    {lang === "de"
+                      ? "Dieses Profil und alle zugehörigen lokalen Daten werden gelöscht. Andere Profile sind davon nicht betroffen."
+                      : "This profile and all of its local data will be removed. Other profiles are not affected."}
+                  </p>
+                  {showProfileDeleteConfirmation ? (
+                    <div className="reset-confirm" style={{ marginTop: "0.75rem" }}>
+                      <p className="muted">
+                        {lang === "de"
+                          ? "Zum endgültigen Löschen bitte DELETE eingeben und die PIN dieses Profils bestätigen."
+                          : "To confirm deletion, please type DELETE and enter this profile's PIN."}
+                      </p>
+                      <div className="form-row" style={{ marginTop: "0.5rem" }}>
+                        <input
+                          type="text"
+                          value={profileDeleteConfirmInput}
+                          onChange={(e) => setProfileDeleteConfirmInput(e.target.value)}
+                          placeholder="DELETE"
+                        />
+                      </div>
+                      <div className="form-row" style={{ marginTop: "0.5rem" }}>
+                        <input
+                          type="password"
+                          value={profileDeletePinInput}
+                          onChange={(e) => setProfileDeletePinInput(e.target.value)}
+                          placeholder={lang === "de" ? "PIN des Profils" : "Profile PIN"}
+                          autoComplete="current-password"
+                        />
+                      </div>
+                      {profileDeleteError && (
+                        <p className="error-text" style={{ marginTop: "0.5rem" }}>
+                          {profileDeleteError}
+                        </p>
+                      )}
+                      <div className="reset-actions" style={{ marginTop: "0.75rem" }}>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => {
+                            setShowProfileDeleteConfirmation(false);
+                            setProfileDeleteConfirmInput("");
+                            setProfileDeletePinInput("");
+                            setProfileDeleteError(null);
+                          }}
+                        >
+                          {t(lang, "reset_local_cancel")}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-danger"
+                          disabled={
+                            profileDeleteConfirmInput !== "DELETE" || !profileDeletePinInput
+                          }
+                          onClick={handleDeleteProfile}
+                        >
+                          {lang === "de" ? "Profil löschen" : "Delete profile"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="reset-actions reset-actions-single" style={{ marginTop: "0.75rem" }}>
+                      <button
+                        type="button"
+                        className="btn-danger"
+                        onClick={() => {
+                          setShowProfileDeleteConfirmation(true);
+                          setProfileDeleteConfirmInput("");
+                          setProfileDeletePinInput("");
+                          setProfileDeleteError(null);
+                        }}
+                      >
+                        {lang === "de" ? "Profil löschen" : "Delete profile"}
+                      </button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="muted">
+                  {lang === "de"
+                    ? "Kein aktives Profil. Bitte zuerst ein Profil einrichten oder anmelden."
+                    : "No active profile. Please set up or log in to a profile first."}
+                </p>
+              )}
+            </div>
+
+          </div>
+        </div>
+
+<div className="settings-actions">
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => {
+                    if (config) {
+                      handleSaveHoldingConfig();
+                      handleSavePriceSettings();
+                    }
+                    setIsSettingsDirty(false);
+                  }}
+                  disabled={!isSettingsDirty || !config}
+                >
+                  {t(lang, "settings_save_button")}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setIsSettingsOpen(false)}
+                >
+                  {lang === "de" ? "Schließen" : "Close"}
+                </button>
+              </div>
+            </section>
+          </div>
+        </div>
+      )}
 <main className="main">
         <header className="header">
           <div>
-            <h2>{t(lang, "header_portfolio")}</h2>
+            <div className="header-title-row">
+              <h2>Traeky</h2>
+              <span className="version-badge">v{APP_VERSION}</span>
+            </div>
             <p className="header-mode-explainer">
               {auth.isAuthenticated
                 ? t(lang, "header_mode_explainer_cloud")
@@ -1270,18 +2169,14 @@ const handleRestoreEncryptedBackup = async () => {
             </p>
           </div>
           <div className="header-right">
-            <span
-              className="pill pill-small"
-              title={
-                auth.isAuthenticated
-                  ? t(lang, "header_mode_pill_cloud_hint")
-                  : t(lang, "header_mode_pill_local_hint")
-              }
-            >
-              {auth.isAuthenticated
-                ? t(lang, "login_status_cloud")
-                : t(lang, "login_status_local")}
-            </span>
+            {auth.isAuthenticated && (
+              <span
+                className="pill pill-small"
+                title={t(lang, "header_mode_pill_cloud_hint")}
+              >
+                {t(lang, "login_status_cloud")}
+              </span>
+            )}
             {auth.isAuthenticated ? (
               <button
                 type="button"
@@ -1299,282 +2194,276 @@ const handleRestoreEncryptedBackup = async () => {
                 {t(lang, "header_login_button")}
               </button>
             ) : null}
+            <button
+              type="button"
+              className="icon-circle-button"
+              onClick={() => {
+                setIsSettingsOpen(true);
+                setIsProfileMenuOverlayOpen(false);
+              }}
+              aria-label={t(lang, "header_settings_button")}
+            >
+              <span aria-hidden="true">⚙</span>
+            </button>
+            <div className="profile-dropdown" ref={profileDropdownRef}>
+              <button
+                type="button"
+                className="icon-circle-button"
+                onClick={() => {
+                  setIsProfileMenuOverlayOpen((open) => !open);
+                }}
+                aria-label={t(lang, "header_profile_button")}
+              >
+                <span aria-hidden="true" className="icon-user" />
+              </button>
+              {isProfileMenuOverlayOpen && activeProfile && (
+                <div className="profile-dropdown-menu">
+                  <button
+                    type="button"
+                    className="dropdown-item"
+                    onClick={() => {
+                      setRenameProfileNameInput(activeProfile.name);
+                      setRenameProfileError(null);
+                      setIsRenameProfileOverlayOpen(true);
+                      setIsProfileMenuOverlayOpen(false);
+                    }}
+                  >
+                    {t(lang, "profile_menu_rename")}
+                  </button>
+                  <button
+                    type="button"
+                    className="dropdown-item"
+                    onClick={() => {
+                      setPinChangeCurrentPinInput("");
+                      setPinChangeNewPinInput("");
+                      setPinChangeNewPinConfirmInput("");
+                      setPinChangeError(null);
+                      setIsPinChangeOverlayOpen(true);
+                      setIsProfileMenuOverlayOpen(false);
+                    }}
+                  >
+                    {t(lang, "profile_menu_change_pin")}
+                  </button>
+                  <button
+                    type="button"
+                    className="dropdown-item"
+                    onClick={() => {
+                      setCreateProfileNameInput("");
+                      setCreateProfilePinInput("");
+                      setCreateProfilePinConfirmInput("");
+                      setCreateProfileError(null);
+                      setIsCreateProfileOverlayOpen(true);
+                      setIsProfileMenuOverlayOpen(false);
+                    }}
+                  >
+                    {t(lang, "profile_menu_add_profile")}
+                  </button>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              className="icon-circle-button"
+              onClick={() => {
+                if (!activeProfile) return;
+                logoutActiveProfileSession();
+                setActiveProfile(null);
+                setProfileOverview(null);
+                setHoldings([]);
+                setHoldingsPortfolioEur(null);
+                setHoldingsPortfolioUsd(null);
+                setFxRateEurUsd(null);
+                setTransactions([]);
+                setExpiring([]);
+                setError(null);
+                setTxFilterYear("");
+                setTxFilterAsset("");
+                setTxFilterType("");
+                setTxSearch("");
+                setIsProfileMenuOverlayOpen(false);
+                const overview = getProfileOverview();
+                setProfileOverview(overview);
+                if (overview.profiles.length > 0) {
+                  setLoginProfileId(overview.profiles[0].id);
+                } else {
+                  setLoginProfileId("");
+                }
+                setLoginPinInput("");
+                setLoginError(null);
+                setIsProfileLoginOverlayOpen(true);
+              }}
+              aria-label={t(lang, "profile_menu_logout")}
+              disabled={!activeProfile}
+            >
+              <span aria-hidden="true">⏻</span>
+            </button>
           </div>
+
         </header>
 
-        <section className="cards">
-          <div className="card">
-            <h3>{t(lang, "holdings_title")}</h3>
-            {holdings.length === 0 ? (
+        <section className="card">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.5rem" }}>
+              <h3 style={{ margin: 0 }}>{t(lang, "holdings_title")}</h3>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => setShowTransactionForm(true)}
+                >
+                  {t(lang, "tx_new_open_button")}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setShowExternalImport(true)}
+                >
+                  {t(lang, "external_import_open_button")}
+                </button>
+              </div>
+            {loading && (
+              <p className="muted">{t(lang, "holdings_price_loading")}</p>
+            )}
+            </div>
+            {displayHoldings.length === 0 ? (
               <p className="muted">{t(lang, "holdings_empty")}</p>
             ) : (
               <>
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>{t(lang, "holdings_col_asset")}</th>
-                      <th>{t(lang, "holdings_col_amount")}</th>
-                      <th>{holdingsValueHeader}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {holdings.map((h, index) => {
-                      const primaryRaw =
-                        lang === "de" ? h.value_eur ?? null : h.value_usd ?? null;
-                      const secondaryRaw =
-                        lang === "de" ? h.value_usd ?? null : h.value_eur ?? null;
+                                
+                <div className="holdings-summary">
+                  <div className="holdings-summary-item">
+                    <div className="holdings-summary-label">
+                      {t(lang, "holdings_portfolio_value")}
+                    </div>
+                    <div className="holdings-summary-value">
+                      {(() => {
+                        const baseIsUsd = config?.base_currency === "USD";
+                        const primaryRaw = baseIsUsd
+                          ? portfolioUsd ?? null
+                          : portfolioEur ?? null;
+                        const primarySymbol = baseIsUsd ? "$" : "€";
+                        const fallbackRaw = baseIsUsd
+                          ? portfolioEur ?? null
+                          : portfolioUsd ?? null;
+                        const fallbackSymbol = baseIsUsd ? "€" : "$";
 
-                      const primarySymbol = lang === "de" ? "€" : "$";
-                      const secondarySymbol = lang === "de" ? "$" : "€";
-
-                      let valueDisplay: string | null = null;
-                      if (primaryRaw != null) {
-                        valueDisplay = `${primaryRaw.toLocaleString(currentLocale, {
-                          minimumFractionDigits: 0,
-                          maximumFractionDigits: 3,
-                        })} ${primarySymbol}`;
-                        if (secondaryRaw != null) {
-                          valueDisplay += ` (${secondaryRaw.toLocaleString(currentLocale, {
+                        const fmt = (
+                          value: number | null | undefined,
+                          symbol: string,
+                        ): string | null => {
+                          if (value == null || Math.abs(value) <= 0.000001)
+                            return null;
+                          return `${value.toLocaleString(currentLocale, {
                             minimumFractionDigits: 0,
-                            maximumFractionDigits: 3,
-                          })} ${secondarySymbol})`;
-                        }
-                      }
+                            maximumFractionDigits: 2,
+                          })} ${symbol}`;
+                        };
 
-                      return (
-                        <tr key={`${h.asset_symbol}-${index}`}>
-                          <td>{h.asset_symbol}</td>
-                          <td>
-                            {h.total_amount.toLocaleString(currentLocale, {
-                              maximumFractionDigits: 8,
-                            })}
-                          </td>
-                          <td>
-                            {valueDisplay ? (
-                              valueDisplay
-                            ) : (
-                              <button
-                                type="button"
-                                className="btn-link"
-                                disabled={pricesRefreshing}
-                                onClick={handleReloadHoldingPrices}
-                              >
-                                {pricesRefreshing
-                                  ? t(lang, "holdings_price_loading")
-                                  : t(lang, "holdings_price_reload")}
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-                <div style={{ marginTop: "0.5rem", fontSize: "0.8rem" }}>
-                  <strong>{t(lang, "holdings_portfolio_value")}:</strong>{" "}
-                  {(() => {
-                    const hasEur =
-                      portfolioEur != null &&
-                      Math.abs(portfolioEur) > 0.000001;
-                    const hasUsd =
-                      portfolioUsd != null &&
-                      Math.abs(portfolioUsd) > 0.000001;
+                        return (
+                          fmt(primaryRaw, primarySymbol) ??
+                          fmt(fallbackRaw, fallbackSymbol) ??
+                          "-"
+                        );
+                      })()}
+                    </div>
+                  </div>
+                  <div className="holdings-summary-item">
+                    <div className="holdings-summary-label">
+                      {t(lang, "holdings_portfolio_assets_count")}
+                    </div>
+                    <div className="holdings-summary-value">
+                      {displayHoldings.length}
+                    </div>
+                  </div>
+                </div>
+                <div className="holdings-grid">
+                  {displayHoldings.map((h) => {
+                    const baseIsUsd = config?.base_currency === "USD";
+                    const primaryRaw = baseIsUsd
+                      ? h.value_usd ?? null
+                      : h.value_eur ?? null;
+                    const primarySymbol = baseIsUsd ? "$" : "€";
 
-                    if (lang === "de") {
-                      if (hasEur) {
-                        return (
-                          <>
-                            {portfolioEur!.toLocaleString(currentLocale, {
-                              minimumFractionDigits: 0,
-                              maximumFractionDigits: 3,
-                            })}{" "}
-                            €
-                            {hasUsd && (
-                              <>
-                                {" "}
-                                (
-                                {portfolioUsd!.toLocaleString(currentLocale, {
-                                  minimumFractionDigits: 0,
-                                  maximumFractionDigits: 3,
-                                })}{" "}
-                                $)
-                              </>
-                            )}
-                          </>
-                        );
-                      }
-                      if (hasUsd) {
-                        return (
-                          <>
-                            {portfolioUsd!.toLocaleString(currentLocale, {
-                              minimumFractionDigits: 0,
-                              maximumFractionDigits: 3,
-                            })}{" "}
-                            $
-                          </>
-                        );
-                      }
-                      return "-";
-                    } else {
-                      if (hasUsd) {
-                        return (
-                          <>
-                            {portfolioUsd!.toLocaleString(currentLocale, {
-                              minimumFractionDigits: 0,
-                              maximumFractionDigits: 3,
-                            })}{" "}
-                            $
-                            {hasEur && (
-                              <>
-                                {" "}
-                                (
-                                {portfolioEur!.toLocaleString(currentLocale, {
-                                  minimumFractionDigits: 0,
-                                  maximumFractionDigits: 3,
-                                })}{" "}
-                                €)
-                              </>
-                            )}
-                          </>
-                        );
-                      }
-                      if (hasEur) {
-                        return (
-                          <>
-                            {portfolioEur!.toLocaleString(currentLocale, {
-                              minimumFractionDigits: 0,
-                              maximumFractionDigits: 3,
-                            })}{" "}
-                            €
-                          </>
-                        );
-                      }
-                      return "-";
-                    }
-                  })()}
+                    const value =
+                      primaryRaw != null
+                        ? `${primaryRaw.toLocaleString(currentLocale, {
+                            minimumFractionDigits: 0,
+                            maximumFractionDigits: 2,
+                          })} ${primarySymbol}`
+                        : null;
+
+                    return (
+                      <div key={h.asset_symbol} className="holding-card">
+                        <div className="holding-card-header">
+                          <span
+                            className="holding-asset"
+                            title={
+                              getAssetMetadata(h.asset_symbol)?.name ||
+                              h.asset_symbol ||
+                              undefined
+                            }
+                          >
+                            {getAssetMetadata(h.asset_symbol)?.symbol ?? h.asset_symbol}
+                          </span>
+                        </div>
+                        <div className="holding-card-body">
+                          <div className="holding-row">
+                            <span className="holding-label">
+                              {t(lang, "holdings_col_amount")}
+                            </span>
+                            <span className="holding-value">
+                              {h.total_amount.toLocaleString(currentLocale, {
+                                maximumFractionDigits: 8,
+                              })}
+                            </span>
+                          </div>
+                          <div className="holding-row">
+                            <span className="holding-label">
+                              {config?.base_currency === "USD"
+                                ? t(lang, "holdings_col_value_usd")
+                                : t(lang, "holdings_col_value_eur")}
+                            </span>
+                            <span className="holding-value">
+                              {value ?? (
+                                <>
+                                  <span className="holding-value-na">N/A</span>
+                                  <button
+                                    type="button"
+                                    className="icon-button"
+                                    aria-label={t(
+                                      lang,
+                                      "holdings_price_reload",
+                                    )}
+                                    title={t(lang, "holdings_price_reload")}
+                                    disabled={pricesRefreshing}
+                                    onClick={handleReloadHoldingPrices}
+                                  >
+                                    {pricesRefreshing ? "…" : "⟳"}
+                                  </button>
+                                </>
+                              )}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </>
             )}
-          </div>
-
-          <div className="card">
-            <h3>
-              {editingId ? t(lang, "form_title_edit") : t(lang, "form_title_new")}
-            </h3>
-            <form className="form" onSubmit={handleSubmit}>
-              <div className="form-row">
-                <label>{t(lang, "form_asset")}</label>
-                <input
-                  name="asset_symbol"
-                  value={form.asset_symbol}
-                  onChange={handleChange}
-                  placeholder="IOTA, BTC, ETH..."
-                  required
-                />
-              </div>
-              <div className="form-row">
-                <label>{t(lang, "form_type")}</label>
-                <select name="tx_type" value={form.tx_type} onChange={handleChange}>
-                  <option value="BUY">BUY</option>
-                  <option value="SELL">SELL</option>
-                  <option value="TRANSFER_IN">TRANSFER_IN</option>
-                  <option value="TRANSFER_OUT">TRANSFER_OUT</option>
-                  <option value="STAKING_REWARD">STAKING_REWARD</option>
-                  <option value="AIRDROP">AIRDROP</option>
-                </select>
-              </div>
-              <div className="form-row">
-                <label>{t(lang, "form_amount")}</label>
-                <input
-                  type="number"
-                  step="0.00000001"
-                  name="amount"
-                  value={form.amount}
-                  onChange={handleChange}
-                  placeholder="0"
-                  required
-                />
-              </div>
-              <div className="form-row">
-                <label>{t(lang, "form_price")}</label>
-                <input
-                  type="number"
-                  step="0.00000001"
-                  name="price_fiat"
-                  value={form.price_fiat}
-                  onChange={handleChange}
-                  placeholder={t(lang, "form_price_placeholder")}
-                />
-              </div>
-              <div className="form-row">
-                <label>{t(lang, "form_fiat_currency")}</label>
-                <input
-                  name="fiat_currency"
-                  value={form.fiat_currency}
-                  onChange={handleChange}
-                />
-              </div>
-              <div className="form-row">
-                <label>{t(lang, "form_timestamp")}</label>
-                <input
-                  type="datetime-local"
-                  name="timestamp"
-                  value={form.timestamp}
-                  onChange={handleChange}
-                  required
-                  lang={currentLocale}
-                />
-              </div>
-              <div className="form-row">
-                <label>{t(lang, "form_source")}</label>
-                <input
-                  name="source"
-                  value={form.source}
-                  onChange={handleChange}
-                  placeholder={t(lang, "form_source_placeholder")}
-                />
-              </div>
-              <div className="form-row">
-                <label>{t(lang, "form_tx_id")}</label>
-                <input
-                  name="tx_id"
-                  value={form.tx_id}
-                  onChange={handleChange}
-                  placeholder="optional"
-                />
-              </div>
-              <div className="form-row">
-                <label>{t(lang, "form_note")}</label>
-                <textarea
-                  name="note"
-                  value={form.note}
-                  onChange={handleChange}
-                  rows={2}
-                  placeholder={t(lang, "form_note_placeholder")}
-                />
-              </div>
-
-              <div className="form-actions">
-                <button type="submit" className="btn-primary">
-                  {editingId ? t(lang, "form_update") : t(lang, "form_save")}
-                </button>
-                {editingId && (
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    onClick={resetForm}
-                  >
-                    {t(lang, "form_cancel")}
-                  </button>
-                )}
-              </div>
-            </form>
-          </div>
         </section>
-
-        <section className="card">
-          <h3>{t(lang, "table_tx_title")}</h3>
-<div className="tx-filters">
+<section className="card">
+          <div className="card-header-row">
+            <h3>{t(lang, "table_tx_title")}</h3>
+            <button
+              type="button"
+              className="btn-secondary export-button"
+              onClick={handleExportPdf}
+              disabled={filteredTransactions.length === 0}
+            >
+              {t(lang, "action_export_pdf")}
+            </button>
+          </div>
+          <div className="tx-filters">
           <div className="tx-filter-group form-row">
             <label>{t(lang, "tx_filter_year_label")}</label>
             <select
@@ -1624,9 +2513,9 @@ const handleRestoreEncryptedBackup = async () => {
               <option value="">{t(lang, "tx_filter_type_all")}</option>
               <option value="BUY">BUY</option>
               <option value="SELL">SELL</option>
-              <option value="TRANSFER_IN">TRANSFER_IN</option>
-              <option value="TRANSFER_OUT">TRANSFER_OUT</option>
-              <option value="STAKING_REWARD">STAKING_REWARD</option>
+              <option value="TRANSFER_IN">TRANSFER (IN)</option>
+              <option value="TRANSFER_OUT">TRANSFER (OUT)</option>
+              <option value="STAKING_REWARD">STAKING REWARD</option>
               <option value="AIRDROP">AIRDROP</option>
             </select>
           </div>
@@ -1648,7 +2537,7 @@ const handleRestoreEncryptedBackup = async () => {
             <p className="muted">{t(lang, "table_tx_empty")}</p>
           ) : (
             <>
-            <table className="table table-striped">
+            <table className="table table-striped tx-table">
               <thead>
                 <tr>
                   <th>{t(lang, "table_col_time")}</th>
@@ -1671,27 +2560,140 @@ const handleRestoreEncryptedBackup = async () => {
 
                   return (
                     <tr key={tx.id ?? `tx-${index}`}>
-                      <td>{dateTimeFormatter.format(new Date(tx.timestamp))}</td>
-                      <td>{tx.asset_symbol}</td>
-                      <td>{tx.tx_type}</td>
+                      <td>
+  {(() => {
+    const formatted = dateTimeFormatter.format(new Date(tx.timestamp));
+    const parts = formatted.split(",");
+    const datePart = parts[0]?.trim() ?? formatted;
+    const timePart = parts[1]?.trim();
+
+    // Render date and time on separate lines, breaking after the comma
+    if (!timePart) {
+      return formatted;
+    }
+
+    return (
+      <>
+        {datePart}
+        {","}
+        <br />
+        {timePart}
+      </>
+    );
+  })()}
+</td>
+                      <td
+  title={
+    getAssetMetadata(tx.asset_symbol)?.name ||
+    tx.asset_symbol ||
+    undefined
+  }
+>
+  {getAssetMetadata(tx.asset_symbol)?.symbol ?? tx.asset_symbol}
+</td>
+                      <td>{formatTxTypeLabel(tx.tx_type)}</td>
                       <td>{tx.amount}</td>
-                      <td>
-                        {tx.price_fiat != null
-                          ? `${tx.price_fiat.toLocaleString(currentLocale, {
-                              minimumFractionDigits: 0,
-                              maximumFractionDigits: 3,
-                            })} ${tx.fiat_currency}`
-                          : "-"}
+                                            <td>
+                        {(() => {
+                          const baseCurrency = config?.base_currency === "USD" ? "USD" : "EUR";
+                          const amount = typeof tx.amount === "number" ? tx.amount : 0;
+
+                          let totalValue: number | null = null;
+
+                          if (baseCurrency === "USD") {
+                            if (typeof tx.value_usd === "number" && Number.isFinite(tx.value_usd)) {
+                              totalValue = tx.value_usd;
+                            } else if (
+                              tx.fiat_currency === "USD" &&
+                              typeof tx.fiat_value === "number" &&
+                              Number.isFinite(tx.fiat_value)
+                            ) {
+                              totalValue = tx.fiat_value;
+                            }
+                          } else {
+                            if (typeof tx.value_eur === "number" && Number.isFinite(tx.value_eur)) {
+                              totalValue = tx.value_eur;
+                            } else if (
+                              tx.fiat_currency === "EUR" &&
+                              typeof tx.fiat_value === "number" &&
+                              Number.isFinite(tx.fiat_value)
+                            ) {
+                              totalValue = tx.fiat_value;
+                            }
+                          }
+
+                          if (totalValue == null) {
+                            return "-";
+                          }
+
+                          if (!Number.isFinite(amount) || amount === 0) {
+                            return "-";
+                          }
+
+                          const unitPrice = totalValue / amount;
+
+                          return `${unitPrice.toLocaleString(currentLocale, {
+                            minimumFractionDigits: 0,
+                            maximumFractionDigits: 2,
+                          })} ${baseCurrency}`;
+                        })()}
                       </td>
                       <td>
-                        {tx.fiat_value != null
-                          ? `${tx.fiat_value.toLocaleString(currentLocale, {
-                              minimumFractionDigits: 0,
-                              maximumFractionDigits: 3,
-                            })} ${tx.fiat_currency}`
-                          : "-"}
+                        {(() => {
+                          const baseCurrency = config?.base_currency === "USD" ? "USD" : "EUR";
+
+                          let totalValue: number | null = null;
+
+                          if (baseCurrency === "USD") {
+                            if (typeof tx.value_usd === "number" && Number.isFinite(tx.value_usd)) {
+                              totalValue = tx.value_usd;
+                            } else if (
+                              tx.fiat_currency === "USD" &&
+                              typeof tx.fiat_value === "number" &&
+                              Number.isFinite(tx.fiat_value)
+                            ) {
+                              totalValue = tx.fiat_value;
+                            }
+                          } else {
+                            if (typeof tx.value_eur === "number" && Number.isFinite(tx.value_eur)) {
+                              totalValue = tx.value_eur;
+                            } else if (
+                              tx.fiat_currency === "EUR" &&
+                              typeof tx.fiat_value === "number" &&
+                              Number.isFinite(tx.fiat_value)
+                            ) {
+                              totalValue = tx.fiat_value;
+                            }
+                          }
+
+                          if (totalValue == null) {
+                            return "-";
+                          }
+
+                          return `${totalValue.toLocaleString(currentLocale, {
+                            minimumFractionDigits: 0,
+                            maximumFractionDigits: 2,
+                          })} ${baseCurrency}`;
+                        })()}
                       </td>
-                      <td>{tx.tx_id || "-"}</td>
+
+                      <td>
+  {tx.tx_id ? (
+    (() => {
+      const url = getTxExplorerUrl(tx.asset_symbol, tx.tx_id);
+      if (!url) {
+        return tx.tx_id;
+      }
+      return (
+        <a href={url} target="_blank" rel="noopener noreferrer" className="txid-link">
+          {tx.tx_id}
+        </a>
+      );
+    })()
+  ) : (
+    "-"
+  )}
+</td>
                       <td>{tx.source || "-"}</td>
                       <td>
                         {!isTaxRelevant(tx) ? (
@@ -1702,7 +2704,6 @@ const handleRestoreEncryptedBackup = async () => {
                           </span>
                         ) : endDate ? (
                           <span className="pill pill-warning">
-                            {t(lang, "holding_until_prefix")}{" "}
                             {dateFormatter.format(endDate)}
                           </span>
                         ) : (
@@ -1730,6 +2731,7 @@ const handleRestoreEncryptedBackup = async () => {
                               note: tx.note || "",
                               tx_id: tx.tx_id || "",
                             });
+                            setShowTransactionForm(true);
                           }}
                         >
                           {t(lang, "action_edit")}
@@ -1856,6 +2858,7 @@ const handleRestoreEncryptedBackup = async () => {
                             note: tx.note || "",
                             tx_id: tx.tx_id || "",
                           });
+                          setShowTransactionForm(true);
                         }}
                       >
                         {t(lang, "action_edit")}
@@ -1914,7 +2917,651 @@ const handleRestoreEncryptedBackup = async () => {
         </section>
         )}
 
+      
+      {showTransactionForm && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.4)",
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1rem",
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              position: "relative",
+              maxWidth: "720px",
+              width: "100%",
+              maxHeight: "80vh",
+              overflow: "auto",
+            }}
+          >
+            <button
+              type="button"
+              className="btn-icon-close"
+              onClick={() => {
+                resetForm();
+                setShowTransactionForm(false);
+              }}
+              aria-label={t(lang, "close_overlay")}
+              title={t(lang, "close_overlay")}
+            >
+              ×
+            </button>
+            <h3>
+              {editingId ? t(lang, "form_title_edit") : t(lang, "form_title_new")}
+            </h3>
+            <form className="form" onSubmit={handleSubmit}>
+              <div className="form-row">
+                <label>{t(lang, "form_asset")}</label>
+                <input
+                  name="asset_symbol"
+                  value={form.asset_symbol}
+                  onChange={handleChange}
+                  placeholder="IOTA, BTC, ETH..."
+                  required
+                />
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_type")}</label>
+                <select name="tx_type" value={form.tx_type} onChange={handleChange}>
+                  <option value="BUY">BUY</option>
+                  <option value="SELL">SELL</option>
+                  <option value="TRANSFER_IN">TRANSFER (IN)</option>
+                  <option value="TRANSFER_OUT">TRANSFER (OUT)</option>
+                  <option value="STAKING_REWARD">STAKING REWARD</option>
+                  <option value="AIRDROP">AIRDROP</option>
+                </select>
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_amount")}</label>
+                <input
+                  type="number"
+                  step="0.00000001"
+                  name="amount"
+                  value={form.amount}
+                  onChange={handleChange}
+                  placeholder="0"
+                  required
+                />
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_price")}</label>
+                <input
+                  type="number"
+                  step="0.00000001"
+                  name="price_fiat"
+                  value={form.price_fiat}
+                  onChange={handleChange}
+                  placeholder={t(lang, "form_price_placeholder")}
+                />
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_pair_currency")}</label>
+                <input
+                  name="fiat_currency"
+                  value={form.fiat_currency}
+                  onChange={handleChange}
+                  placeholder={t(lang, "form_pair_currency_placeholder")}
+                />
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_timestamp")}</label>
+                <input
+                  type="datetime-local"
+                  name="timestamp"
+                  value={form.timestamp}
+                  onChange={handleChange}
+                  required
+                  lang={currentLocale}
+                />
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_source")}</label>
+                <input
+                  name="source"
+                  value={form.source}
+                  onChange={handleChange}
+                  placeholder={t(lang, "form_source_placeholder")}
+                />
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_tx_id")}</label>
+                <input
+                  name="tx_id"
+                  value={form.tx_id}
+                  onChange={handleChange}
+                  placeholder="optional"
+                />
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_note")}</label>
+                <textarea
+                  name="note"
+                  value={form.note}
+                  onChange={handleChange}
+                  rows={2}
+                  placeholder={t(lang, "form_note_placeholder")}
+                />
+              </div>
+
+              <div className="form-actions">
+                <button type="submit" className="btn-primary">
+                  {editingId ? t(lang, "form_update") : t(lang, "form_save")}
+                </button>
+                {editingId && (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={resetForm}
+                  >
+                    {t(lang, "close_overlay")}
+                  </button>
+                )}
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showExternalImport && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.4)",
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1rem",
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              position: "relative",
+              maxWidth: "720px",
+              width: "100%",
+              maxHeight: "80vh",
+              overflow: "auto",
+            }}
+          >
+            <button
+              type="button"
+              className="btn-icon-close"
+              onClick={() => {
+                setShowExternalImport(false);
+                setExternalImportResult(null);
+                setExternalFileName(null);
+                setExternalImportSource("binance_trade_xlsx");
+              }}
+              aria-label={t(lang, "close_overlay")}
+              title={t(lang, "close_overlay")}
+            >
+              ×
+            </button>
+            <h3>{t(lang, "external_import_title")}</h3>
+            <p className="muted">
+              {t(lang, "external_import_description")}
+            </p>
+
+            <div className="form">
+              <div className="form-row">
+                <label>{t(lang, "external_import_source_label")}</label>
+                <select
+                  value={externalImportSource}
+                  onChange={(e) => {
+                    setExternalImportSource(e.target.value);
+                    setExternalImportResult(null);
+                    setExternalFileName(null);
+                  }}
+                >
+                  <option value="binance_trade_xlsx">
+                    {t(lang, "external_import_source_binance_xlsx")}
+                  </option>
+                  <option value="bitpanda_csv">
+                    {t(lang, "external_import_source_bitpanda_csv")}
+                  </option>
+                </select>
+              </div>
+
+              <div className="form-row file-row">
+                <label>{t(lang, "external_import_file_label")}</label>
+                <div className="file-input-wrapper">
+                  <input
+                    type="file"
+                    accept={
+                      externalImportSource === "binance_trade_xlsx"
+                        ? ".xlsx"
+                        : ".csv"
+                    }
+                    onChange={handleExternalFileChange}
+                    disabled={externalImporting}
+                  />
+                  <span className="file-name">
+                    {externalFileName || t(lang, "external_import_no_file")}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {externalImporting && (
+              <>
+                <p className="muted">{t(lang, "external_import_running")}</p>
+                <progress />
+              </>
+            )}
+
+            {externalImportResult && (
+              <div className="csv-result">
+                <p className="muted">
+                  {t(lang, "csv_result_prefix")} {externalImportResult.imported}
+                </p>
+                {externalImportResult.errors &&
+                  externalImportResult.errors.length > 0 && (
+                    <div className="csv-errors">
+                      <p className="muted">
+                        {t(lang, "csv_result_errors_title")}
+                      </p>
+                      <ul>
+                        {externalImportResult.errors.map((err, index) => (
+                          <li key={index}>{err}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+              </div>
+            )}
+
+            <div
+              style={{
+                marginTop: "1rem",
+                display: "flex",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setShowExternalImport(false)}
+              >
+                {t(lang, externalImportResult ? "external_import_done_button" : "form_cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+
+
+      {false && isProfileMenuOverlayOpen && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <div className="modal-header">
+              <h2>{lang === "de" ? "Profil" : "Profile"}</h2>
+              <button
+                type="button"
+                className="icon-button modal-close-button"
+                onClick={() => setIsProfileMenuOverlayOpen(false)}
+                aria-label={t(lang, "form_cancel")}
+              >
+                ×
+              </button>
+            </div>
+            <p className="muted">
+              {lang === "de"
+                ? "Verwalte dein aktives Profil. Änderungen gelten nur für dieses Profil."
+                : "Manage your active profile. Changes apply only to this profile."}
+            </p>
+            <div className="profile-menu-active">
+              {activeProfile ? (
+                <>
+                  <p className="muted" style={{ marginTop: "0.75rem" }}>
+                    {lang === "de" ? "Aktives Profil:" : "Active profile:"}
+                  </p>
+                  <p style={{ fontWeight: 600, marginTop: "0.25rem" }}>
+                    {activeProfile.name}
+                  </p>
+                </>
+              ) : (
+                <p className="muted" style={{ marginTop: "0.75rem" }}>
+                  {lang === "de"
+                    ? "Es ist aktuell kein Profil aktiv."
+                    : "There is currently no active profile."}
+                </p>
+              )}
+            </div>
+            {activeProfile && (
+              <div className="profile-menu-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    if (!activeProfile) return;
+                    setRenameProfileNameInput(activeProfile.name);
+                    setRenameProfileError(null);
+                    setIsRenameProfileOverlayOpen(true);
+                    setIsProfileMenuOverlayOpen(false);
+                  }}
+                >
+                  {lang === "de" ? "Profilname ändern" : "Rename profile"}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setPinChangeCurrentPinInput("");
+                    setPinChangeNewPinInput("");
+                    setPinChangeNewPinConfirmInput("");
+                    setPinChangeError(null);
+                    setIsPinChangeOverlayOpen(true);
+                    setIsProfileMenuOverlayOpen(false);
+                  }}
+                >
+                  {lang === "de" ? "PIN ändern" : "Change PIN"}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setCreateProfileNameInput("");
+                    setCreateProfilePinInput("");
+                    setCreateProfilePinConfirmInput("");
+                    setCreateProfileError(null);
+                    setIsCreateProfileOverlayOpen(true);
+                    setIsProfileMenuOverlayOpen(false);
+                  }}
+                >
+                  {lang === "de" ? "Weiteres Profil hinzufügen" : "Add another profile"}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    const overview = getProfileOverview();
+                    setProfileOverview(overview);
+                    if (overview.profiles.length > 0 && !loginProfileId) {
+                      setLoginProfileId(overview.profiles[0].id);
+                    }
+                    setLoginPinInput("");
+                    setLoginError(null);
+                    setIsProfileLoginOverlayOpen(true);
+                    setIsProfileMenuOverlayOpen(false);
+                  }}
+                >
+                  {lang === "de" ? "Profil wechseln" : "Switch profile"}
+                </button>
+              </div>
+            )}
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setIsProfileMenuOverlayOpen(false)}
+              >
+                {t(lang, "form_cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isRenameProfileOverlayOpen && activeProfile && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h2>{lang === "de" ? "Profilname ändern" : "Rename profile"}</h2>
+            <p className="muted">
+              {lang === "de"
+                ? "Ändere den Namen des aktiven Profils. Dies hat keinen Einfluss auf die gespeicherten Daten."
+                : "Change the name of the active profile. This does not affect the stored data."}
+            </p>
+            {renameProfileError && (
+              <p className="error-text modal-error">{renameProfileError}</p>
+            )}
+            <form
+              onSubmit={handleRenameProfileSubmit}
+              style={{ marginTop: "1rem" }}
+            >
+              <div className="form-row">
+                <label className="form-label">
+                  <span className="form-label-text">
+                    {lang === "de" ? "Neuer Profilname" : "New profile name"}
+                  </span>
+                  <input
+                    type="text"
+                    className="input"
+                    value={renameProfileNameInput}
+                    onChange={(e) => setRenameProfileNameInput(e.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setIsRenameProfileOverlayOpen(false);
+                    setRenameProfileError(null);
+                  }}
+                >
+                  {t(lang, "form_cancel")}
+                </button>
+                <button type="submit" className="btn-primary">
+                  {lang === "de" ? "Speichern" : "Save"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {isPinChangeOverlayOpen && activeProfile && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h2>{lang === "de" ? "PIN ändern" : "Change PIN"}</h2>
+            <p className="muted">
+              {lang === "de"
+                ? "Ändere die PIN für dieses Profil. Die Profildaten bleiben erhalten und werden mit der neuen PIN geschützt."
+                : "Change the PIN for this profile. The profile data will stay the same and remain protected by the new PIN."}
+            </p>
+            {pinChangeError && (
+              <p className="error-text modal-error">{pinChangeError}</p>
+            )}
+            <form
+              onSubmit={handlePinChangeSubmit}
+              style={{ marginTop: "1rem" }}
+            >
+              <div className="form-row">
+                <label className="form-label">
+                  <span className="form-label-text">
+                    {lang === "de" ? "Aktuelle PIN" : "Current PIN"}
+                  </span>
+                  <input
+                    type="password"
+                    className="input"
+                    value={pinChangeCurrentPinInput}
+                    onChange={(e) => setPinChangeCurrentPinInput(e.target.value)}
+                    autoComplete="current-password"
+                  />
+                </label>
+              </div>
+              <div className="form-row">
+                <label className="form-label">
+                  <span className="form-label-text">
+                    {lang === "de" ? "Neue PIN" : "New PIN"}
+                  </span>
+                  <input
+                    type="password"
+                    className="input"
+                    value={pinChangeNewPinInput}
+                    onChange={(e) => setPinChangeNewPinInput(e.target.value)}
+                    autoComplete="new-password"
+                  />
+                </label>
+              </div>
+              <div className="form-row">
+                <label className="form-label">
+                  <span className="form-label-text">
+                    {lang === "de" ? "Neue PIN wiederholen" : "Repeat new PIN"}
+                  </span>
+                  <input
+                    type="password"
+                    className="input"
+                    value={pinChangeNewPinConfirmInput}
+                    onChange={(e) => setPinChangeNewPinConfirmInput(e.target.value)}
+                    autoComplete="new-password"
+                  />
+                </label>
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setIsPinChangeOverlayOpen(false);
+                    setPinChangeCurrentPinInput("");
+                    setPinChangeNewPinInput("");
+                    setPinChangeNewPinConfirmInput("");
+                    setPinChangeError(null);
+                  }}
+                >
+                  {t(lang, "form_cancel")}
+                </button>
+                <button type="submit" className="btn-primary">
+                  {lang === "de" ? "PIN aktualisieren" : "Update PIN"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {isCreateProfileOverlayOpen && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h2>{lang === "de" ? "Weiteres Profil hinzufügen" : "Add another profile"}</h2>
+            <p className="muted">
+              {lang === "de"
+                ? "Erstelle ein weiteres Profil mit eigener PIN. Daten und Einstellungen werden getrennt vom aktuellen Profil gespeichert."
+                : "Create another profile with its own PIN. Data and settings are stored separately from the current profile."}
+            </p>
+            {createProfileError && (
+              <p className="error-text modal-error">{createProfileError}</p>
+            )}
+            <form
+              onSubmit={handleCreateProfileSubmit}
+              style={{ marginTop: "1rem" }}
+            >
+              <div className="form-row">
+                <label className="form-label">
+                  <span className="form-label-text">{t(lang, "profile_name_label")}</span>
+                  <input
+                    type="text"
+                    className="input"
+                    value={createProfileNameInput}
+                    onChange={(e) => setCreateProfileNameInput(e.target.value)}
+                    placeholder={t(lang, "profile_name_placeholder")}
+                  />
+                </label>
+              </div>
+              <div className="form-row">
+                <label className="form-label">
+                  <span className="form-label-text">{t(lang, "profile_pin_label")}</span>
+                  <input
+                    type="password"
+                    className="input"
+                    value={createProfilePinInput}
+                    onChange={(e) => setCreateProfilePinInput(e.target.value)}
+                    autoComplete="new-password"
+                  />
+                </label>
+                <p className="muted">{t(lang, "profile_pin_hint")}</p>
+              </div>
+              <div className="form-row">
+                <label className="form-label">
+                  <span className="form-label-text">{t(lang, "profile_pin_confirm_label")}</span>
+                  <input
+                    type="password"
+                    className="input"
+                    value={createProfilePinConfirmInput}
+                    onChange={(e) => setCreateProfilePinConfirmInput(e.target.value)}
+                    autoComplete="new-password"
+                  />
+                </label>
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    setIsCreateProfileOverlayOpen(false);
+                    setCreateProfileError(null);
+                  }}
+                >
+                  {t(lang, "form_cancel")}
+                </button>
+                <button type="submit" className="btn-primary">
+                  {lang === "de" ? "Profil erstellen" : "Create profile"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       </main>
+      <footer className="app-footer">
+        <div className="app-footer-content">
+          <div className="app-footer-section">
+            <h4>{t(lang, "disclaimer_title")}</h4>
+            <p className="muted">
+              {t(lang, "disclaimer_line1")}
+              <br />
+              {t(lang, "disclaimer_line2")}
+            </p>
+          </div>
+          <div className="app-footer-section">
+            <h4>{lang === "de" ? "Datenschutz & Verschlüsselung" : "Privacy & Encryption"}</h4>
+            <p className="muted">
+              {auth.mode === "local-only"
+                ? t(lang, "encryption_local_only")
+                : t(lang, "encryption_cloud_demo")}
+            </p>
+            <p className="muted">
+              {t(lang, "encryption_key_hint")}
+            </p>
+            <p className="muted">
+              {t(lang, "local_mode_notice")}
+            </p>
+          </div>
+        </div>
+      </footer>
+      <div className="app-footer-bottom">
+        <p>
+          <a
+            href="https://github.com/pandabytelabs/traeky"
+            target="_blank"
+            rel="noreferrer"
+          >
+            {t(lang, "footer_copyright_brand")}
+          </a>
+          <span> {t(lang, "footer_madewith")} </span>
+          <a
+            href="https://pandabyte.net"
+            target="_blank"
+            rel="noreferrer"
+          >
+            PANDABYTE
+          </a>
+        </p>
+      </div>
+
     </div>
   );
 };

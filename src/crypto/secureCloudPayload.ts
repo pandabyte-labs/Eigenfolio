@@ -3,7 +3,7 @@ import type { JsonValue } from "./cryptoClient";
 
 /**
  * Shape of the data snapshot that will be encrypted client-side before being
- * sent to the Eigenfolio Cloud.
+ * sent to the Traeky Cloud.
  *
  * This is intentionally simple and self-contained so it can be versioned and
  * validated independently on the backend without needing to know any secrets.

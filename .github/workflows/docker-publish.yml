@@ -38,9 +38,9 @@ jobs:
           fi
 
           if [ "${{ github.event.release.prerelease }}" = "true" ]; then
-            echo "tags=pandabytelabs/eigenfolio:${VERSION},pandabytelabs/eigenfolio:testing" >> "$GITHUB_OUTPUT"
+            echo "tags=pandabytelabs/traeky:${VERSION},pandabytelabs/traeky:testing" >> "$GITHUB_OUTPUT"
           else
-            echo "tags=pandabytelabs/eigenfolio:${VERSION},pandabytelabs/eigenfolio:latest,pandabytelabs/eigenfolio:stable" >> "$GITHUB_OUTPUT"
+            echo "tags=pandabytelabs/traeky:${VERSION},pandabytelabs/traeky:latest,pandabytelabs/traeky:stable" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build and push image

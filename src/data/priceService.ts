@@ -35,7 +35,7 @@ type PriceCacheEntry = {
   fetched_at: number;
 };
 
-const PRICE_CACHE_KEY = "eigenfolio:price-cache-v1";
+const PRICE_CACHE_KEY = "traeky:price-cache-v1";
 /**
  * How long a cached price is considered "fresh" before we try to refresh it
  * from the price API again. We intentionally pick a relatively long interval
@@ -83,6 +83,34 @@ function persistPriceCache(): void {
 let rateLimitUntil: number | null = null;
 const RATE_LIMIT_BACKOFF_MS = 60 * 1000; // 1 minute
 
+// Throttle historical price requests to avoid hitting public API limits
+let lastHistoricalRequestAt: number | null = null;
+const MIN_HISTORICAL_REQUEST_INTERVAL_MS = 1500; // 1.5 seconds between history calls
+
+// If we detect repeated network/CORS errors when calling the public price API,
+// we avoid spamming the console but still keep trying after a backoff window.
+let priceApiErrorLogged = false;
+
+// Optional CoinGecko API key used for requests from this browser session.
+let coingeckoApiKey: string | null = null;
+
+export function setCoingeckoApiKey(key: string | null): void {
+  const trimmed = key?.trim() ?? "";
+  coingeckoApiKey = trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * Expose a minimal status about the price API for the UI.
+ *
+ * This does not trigger any requests; it simply reflects whether we have
+ * seen at least one network / CORS / HTTP error in this session. The caller
+ * can use this to show a small notice that price fetching is degraded but
+ * will be retried with backoff.
+ */
+export function getPriceApiStatus(): { hasError: boolean } {
+  return { hasError: priceApiErrorLogged };
+}
+
 function getCachedQuote(sym: string): { eur?: number; usd?: number } | null {
   if (!priceCache) return null;
   const upper = sym.toUpperCase();
@@ -108,7 +136,7 @@ export async function fetchPricesForSymbols(
   symbols: string[],
   fiats: SupportedFiat[] = ["EUR", "USD"],
 ): Promise<PriceMap> {
-  const uniqueSymbols = Array.from(new Set(symbols.map((s) => s.toUpperCase())));
+const uniqueSymbols = Array.from(new Set(symbols.map((s) => s.toUpperCase())));
   if (uniqueSymbols.length === 0) {
     return {};
   }
@@ -153,12 +181,20 @@ export async function fetchPricesForSymbols(
     .map((f) => f.toLowerCase())
     .join(",");
 
-  const url = `${COINGECKO_API}?ids=${encodeURIComponent(
-    ids.join(","),
-  )}&vs_currencies=${encodeURIComponent(vsCurrencies)}`;
+  const params = new URLSearchParams({
+    ids: ids.join(","),
+    vs_currencies: vsCurrencies,
+  });
+
+  if (coingeckoApiKey) {
+    params.set("x_cg_demo_api_key", coingeckoApiKey);
+  }
+
+  const url = `${COINGECKO_API}?${params.toString()}`;
 
   try {
     const res = await fetch(url);
+    lastHistoricalRequestAt = Date.now();
     if (!res.ok) {
       if (res.status === 429) {
         // Simple backoff window to avoid hammering the public API.
@@ -208,7 +244,12 @@ export async function fetchPricesForSymbols(
 
     return result;
   } catch (err) {
-    console.warn("Failed to fetch prices", err);
+    if (!priceApiErrorLogged) {
+      console.warn("Failed to fetch prices", err);
+      priceApiErrorLogged = true;
+    }
+    // Back off further calls for a short window to avoid hammering the API.
+    rateLimitUntil = Date.now() + RATE_LIMIT_BACKOFF_MS;
     return result;
   }
 }
@@ -254,7 +295,7 @@ type HistoricalPriceCacheEntry = PriceCacheEntry;
 
 type HistoricalPriceCache = Record<string, HistoricalPriceCacheEntry>;
 
-const HISTORICAL_PRICE_CACHE_KEY = "eigenfolio:price-cache-historical-v1";
+const HISTORICAL_PRICE_CACHE_KEY = "traeky:price-cache-historical-v1";
 
 let historicalPriceCache: HistoricalPriceCache | null = null;
 
@@ -318,13 +359,24 @@ export async function fetchHistoricalPriceForSymbol(
   fiat: SupportedFiat,
   timestampIso: string,
 ): Promise<{ eur: number | null; usd: number | null } | null> {
-  const upper = symbol.toUpperCase();
+const upper = symbol.toUpperCase();
   const dateKey = extractDateKey(timestampIso);
   if (!dateKey) return null;
 
   // Reuse the simple rate-limit gate used by the spot-price fetcher.
   if (rateLimitUntil && Date.now() < rateLimitUntil) {
     return null;
+  }
+
+  // Basic client-side throttling to stay below public API rate limits,
+  // especially when enriching many historical transactions in a row.
+  if (lastHistoricalRequestAt != null) {
+    const elapsed = Date.now() - lastHistoricalRequestAt;
+    if (elapsed < MIN_HISTORICAL_REQUEST_INTERVAL_MS) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, MIN_HISTORICAL_REQUEST_INTERVAL_MS - elapsed),
+      );
+    }
   }
 
   ensureHistoricalPriceCacheLoaded();
@@ -344,12 +396,22 @@ export async function fetchHistoricalPriceForSymbol(
   const dateParam = toCoingeckoHistoryDateParam(dateKey);
   if (!dateParam) return null;
 
+  const params = new URLSearchParams({
+    date: dateParam,
+    localization: "false",
+  });
+
+  if (coingeckoApiKey) {
+    params.set("x_cg_demo_api_key", coingeckoApiKey);
+  }
+
   const url = `https://api.coingecko.com/api/v3/coins/${encodeURIComponent(
     id,
-  )}/history?date=${encodeURIComponent(dateParam)}&localization=false`;
+  )}/history?${params.toString()}`;
 
   try {
     const res = await fetch(url);
+    lastHistoricalRequestAt = Date.now();
     if (!res.ok) {
       if (res.status === 429) {
         // Back off if we hit the rate limit.
@@ -394,7 +456,12 @@ export async function fetchHistoricalPriceForSymbol(
 
     return { eur, usd };
   } catch (err) {
-    console.warn("Failed to fetch historical price", err);
+    if (!priceApiErrorLogged) {
+      console.warn("Failed to fetch historical price", err);
+      priceApiErrorLogged = true;
+    }
+    // Back off further calls for a short window to avoid hammering the API.
+    rateLimitUntil = Date.now() + RATE_LIMIT_BACKOFF_MS;
     return null;
   }
 }
@@ -403,7 +470,7 @@ export async function fetchHistoricalPriceForSymbol(
  * Hydrate the price cache from a previously stored snapshot.
  *
  * This is used when restoring from an encrypted backup or when loading data
- * that was synced from the Eigenfolio Cloud. It allows the frontend to
+ * that was synced from the Traeky Cloud. It allows the frontend to
  * reuse historical token prices without additional API requests.
  */
 export function hydratePriceCache(snapshot: AssetPriceCache): void {

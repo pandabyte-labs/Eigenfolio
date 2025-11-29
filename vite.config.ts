@@ -3,19 +3,19 @@ import react from "@vitejs/plugin-react-swc";
 
 export default defineConfig(() => {
   // Configure allowed hosts via environment variable:
-  // EIGENFOLIO_ALLOWED_HOSTS
+  // TRAEKY_ALLOWED_HOSTS
   //
   // Examples:
-  //   EIGENFOLIO_ALLOWED_HOSTS=example.com
-  //   EIGENFOLIO_ALLOWED_HOSTS=example.net,example.com
-  //   EIGENFOLIO_ALLOWED_HOSTS=true      # allow all
-  const rawAllowedHosts = process.env.EIGENFOLIO_ALLOWED_HOSTS;
+  //   TRAEKY_ALLOWED_HOSTS=example.com
+  //   TRAEKY_ALLOWED_HOSTS=example.net,example.com
+  //   TRAEKY_ALLOWED_HOSTS=true      # allow all
+  const rawAllowedHosts = process.env.TRAEKY_ALLOWED_HOSTS;
 
   let allowedHosts: string[] | true;
 
   if (!rawAllowedHosts) {
     // Fallback: allow all hosts.
-    // In production you SHOULD override this with EIGENFOLIO_ALLOWED_HOSTS.
+    // In production you SHOULD override this with TRAEKY_ALLOWED_HOSTS.
     allowedHosts = true;
   } else if (
     rawAllowedHosts === "true" ||
@@ -31,7 +31,7 @@ export default defineConfig(() => {
   }
 
   return {
-    envPrefix: ["VITE_", "DISABLE_"],
+    envPrefix: ["VITE_", "DISABLE_", "TRAEKY_"],
     plugins: [react()],
     server: {
       host: "0.0.0.0",
