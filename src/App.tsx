@@ -332,7 +332,7 @@ useEffect(() => {
     tx_id: "",
   });
 
-  const currentLocale = lang === "de" ? "de-DE" : "en-US";
+  const currentLocale = t(lang, "locale_code");
 
   useEffect(() => {
     if (config) {
@@ -410,16 +410,16 @@ useEffect(() => {
     setProfileSetupError(null);
 
     if (!profilePinInput || !profilePinConfirmInput) {
-      setProfileSetupError(lang === "de" ? "Bitte gib eine PIN ein." : "Please enter a PIN.");
+      setProfileSetupError(t(lang, "pin_error_required"));
       return;
     }
     if (profilePinInput !== profilePinConfirmInput) {
-      setProfileSetupError(lang === "de" ? "Die PINs stimmen nicht überein." : "The PIN entries do not match.");
+      setProfileSetupError(t(lang, "pin_error_mismatch"));
       return;
     }
 
     try {
-      const name = profileNameInput.trim() || (lang === "de" ? "Standard" : "Default");
+      const name = profileNameInput.trim() || (t(lang, "profile_default_name"));
       const summary = await createInitialProfile(name, profilePinInput);
       setActiveProfile(summary);
       const overview = getProfileOverview();
@@ -432,9 +432,7 @@ useEffect(() => {
       // eslint-disable-next-line no-console
       console.error("Failed to create initial profile", err);
       setProfileSetupError(
-        lang === "de"
-          ? "Das Profil konnte nicht erstellt werden. Bitte versuche es erneut."
-          : "Could not create profile. Please try again.",
+        t(lang, "profile_error_create_failed"),
       );
     }
   };
@@ -444,11 +442,11 @@ useEffect(() => {
     setLoginError(null);
 
     if (!loginProfileId) {
-      setLoginError(lang === "de" ? "Bitte wähle ein Profil aus." : "Please select a profile.");
+      setLoginError(t(lang, "profile_login_error_select_profile"));
       return;
     }
     if (!loginPinInput) {
-      setLoginError(lang === "de" ? "Bitte gib eine PIN ein." : "Please enter a PIN.");
+      setLoginError(t(lang, "pin_error_required"));
       return;
     }
 
@@ -463,7 +461,7 @@ useEffect(() => {
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error("Failed to log into profile", err);
-      setLoginError(lang === "de" ? "PIN ist ungültig." : "PIN is invalid.");
+      setLoginError(t(lang, "pin_error_invalid"));
     }
   };
 
@@ -472,18 +470,18 @@ useEffect(() => {
     setCreateProfileError(null);
 
     if (!createProfilePinInput || !createProfilePinConfirmInput) {
-      setCreateProfileError(lang === "de" ? "Bitte gib eine PIN ein." : "Please enter a PIN.");
+      setCreateProfileError(t(lang, "pin_error_required"));
       return;
     }
     if (createProfilePinInput !== createProfilePinConfirmInput) {
       setCreateProfileError(
-        lang === "de" ? "Die PINs stimmen nicht überein." : "The PIN entries do not match.",
+        t(lang, "pin_error_mismatch"),
       );
       return;
     }
 
     try {
-      const name = createProfileNameInput.trim() || (lang === "de" ? "Profil" : "Profile");
+      const name = createProfileNameInput.trim() || (t(lang, "profile_section_title"));
       const summary = await createAdditionalProfile(name, createProfilePinInput);
       setActiveProfile(summary);
       const overview = getProfileOverview();
@@ -497,9 +495,7 @@ useEffect(() => {
       // eslint-disable-next-line no-console
       console.error("Failed to create additional profile", err);
       setCreateProfileError(
-        lang === "de"
-          ? "Das Profil konnte nicht erstellt werden. Bitte versuche es erneut."
-          : "Could not create profile. Please try again.",
+        t(lang, "profile_error_create_failed"),
       );
     }
   };
@@ -515,7 +511,7 @@ useEffect(() => {
     const name = renameProfileNameInput.trim();
     if (!name) {
       setRenameProfileError(
-        lang === "de" ? "Der Profilname darf nicht leer sein." : "Profile name must not be empty.",
+        t(lang, "profile_name_error_required"),
       );
       return;
     }
@@ -533,9 +529,7 @@ useEffect(() => {
       // eslint-disable-next-line no-console
       console.error("Failed to rename profile", err);
       setRenameProfileError(
-        lang === "de"
-          ? "Der Profilname konnte nicht geändert werden."
-          : "Could not rename profile.",
+        t(lang, "profile_error_rename_failed"),
       );
     }
   };
@@ -546,21 +540,21 @@ useEffect(() => {
 
     if (!pinChangeCurrentPinInput) {
       setPinChangeError(
-        lang === "de" ? "Bitte gib deine aktuelle PIN ein." : "Please enter your current PIN.",
+        t(lang, "pin_change_error_current_required"),
       );
       return;
     }
 
     if (!pinChangeNewPinInput || !pinChangeNewPinConfirmInput) {
       setPinChangeError(
-        lang === "de" ? "Bitte gib die neue PIN ein." : "Please enter the new PIN.",
+        t(lang, "pin_change_error_new_required"),
       );
       return;
     }
 
     if (pinChangeNewPinInput !== pinChangeNewPinConfirmInput) {
       setPinChangeError(
-        lang === "de" ? "Die PINs stimmen nicht überein." : "The PIN entries do not match.",
+        t(lang, "pin_error_mismatch"),
       );
       return;
     }
@@ -575,9 +569,7 @@ useEffect(() => {
       // eslint-disable-next-line no-console
       console.error("Failed to change profile PIN", err);
       setPinChangeError(
-        lang === "de"
-          ? "Die aktuelle PIN ist ungültig."
-          : "The current PIN is invalid.",
+        t(lang, "pin_change_error_current_invalid"),
       );
     }
   };
@@ -606,14 +598,14 @@ useEffect(() => {
     }
 
     if (!profileDeletePinInput) {
-      setProfileDeleteError(lang === "de" ? "Bitte gib deine PIN ein." : "Please enter your PIN.");
+      setProfileDeleteError(t(lang, "pin_error_required_own"));
       return;
     }
 
     try {
       const valid = await verifyActiveProfilePin(profileDeletePinInput);
       if (!valid) {
-        setProfileDeleteError(lang === "de" ? "PIN ist ungültig." : "PIN is invalid.");
+        setProfileDeleteError(t(lang, "pin_error_invalid"));
         return;
       }
 
@@ -635,9 +627,7 @@ useEffect(() => {
       // eslint-disable-next-line no-console
       console.error("Failed to delete profile", err);
       setProfileDeleteError(
-        lang === "de"
-          ? "Das Profil konnte nicht gelöscht werden."
-          : "Could not delete profile.",
+        t(lang, "profile_error_delete_failed"),
       );
     }
 
@@ -700,9 +690,7 @@ useEffect(() => {
     const rawAmount = (form.amount ?? "").toString().trim();
     if (!rawAmount) {
       setError(
-        lang === "de"
-          ? "Bitte einen Betrag eingeben."
-          : "Please enter an amount."
+        t(lang, "tx_error_amount_required")
       );
       return;
     }
@@ -710,9 +698,7 @@ useEffect(() => {
     const parsedAmount = parseFloat(rawAmount.replace(",", "."));
     if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
       setError(
-        lang === "de"
-          ? "Bitte einen gültigen Betrag größer als 0 eingeben."
-          : "Please enter a valid amount greater than 0."
+        t(lang, "tx_error_amount_positive")
       );
       return;
     }
@@ -783,7 +769,7 @@ const payload = {
 };
 
   const handleDelete = async (txId: number) => {
-  if (!window.confirm(lang === "de" ? "Transaktion wirklich löschen?" : "Really delete this transaction?")) {
+  if (!window.confirm(t(lang, "tx_delete_confirm"))) {
     return;
   }
   try {
@@ -1558,9 +1544,7 @@ const handleRestoreEncryptedBackup = async () => {
                         }
                       >
                         <option value="">
-                          {lang === "de"
-                            ? "Profil auswählen…"
-                            : "Select a profile…"}
+                          {t(lang, "profile_select_placeholder")}
                         </option>
                         {profileOverview.profiles.map((profile) => (
                           <option key={profile.id} value={profile.id}>
@@ -1665,19 +1649,17 @@ const handleRestoreEncryptedBackup = async () => {
         <div className="settings-header-row">
           <div className="settings-header-text">
             <h2 className="settings-section-title">
-              {lang === "de" ? "Einstellungen" : "Settings"}
+              {t(lang, "settings_title")}
             </h2>
             <p className="muted">
-              {lang === "de"
-                ? "Verwalte Sprache, Fiat-Währung, CSV-Import und -Export, Haltefrist, Preisabfrage und lokale Daten."
-                : "Manage language, fiat currency, CSV import and export, holding period, price fetching and local data."}
+              {t(lang, "settings_description")}
             </p>
           </div>
           <button
             type="button"
             className="settings-close-icon"
             onClick={() => setIsSettingsOpen(false)}
-            aria-label={lang === "de" ? "Einstellungen schließen" : "Close settings"}
+            aria-label={t(lang, "settings_close_aria")}
           >
             ×
           </button>
@@ -1686,13 +1668,13 @@ const handleRestoreEncryptedBackup = async () => {
         <div className="settings-grid">
 <div className="card settings-card">
 <div className="sidebar-section">
-          <h2>{lang === "de" ? "Sprache" : "Language"}</h2>
+          <h2>{t(lang, "settings_language_title")}</h2>
           <div className="lang-switch form-row">
             <select
               className="lang-select"
               value={lang}
               onChange={(e) => setLang(e.target.value as Language)}
-              aria-label={lang === "de" ? "Sprache auswählen" : "Select language"}
+              aria-label={t(lang, "settings_language_aria")}
             >
               <option value="en">🇬🇧 English</option>
               <option value="de">🇩🇪 Deutsch</option>
@@ -1999,20 +1981,16 @@ const handleRestoreEncryptedBackup = async () => {
 
                   <hr style={{ margin: "1.5rem 0", borderColor: "rgba(148, 163, 184, 0.35)" }} />
 
-                  <h3 style={{ marginTop: 0 }}>
-                    {lang === "de" ? "Profil löschen" : "Delete profile"}
-                  </h3>
+                  <h2 style={{ marginTop: 0 }}>
+                    {t(lang, "profile_delete_button")}
+                  </h2>
                   <p className="muted">
-                    {lang === "de"
-                      ? "Dieses Profil und alle zugehörigen lokalen Daten werden gelöscht. Andere Profile sind davon nicht betroffen."
-                      : "This profile and all of its local data will be removed. Other profiles are not affected."}
+                    {t(lang, "profile_delete_description")}
                   </p>
                   {showProfileDeleteConfirmation ? (
                     <div className="reset-confirm" style={{ marginTop: "0.75rem" }}>
                       <p className="muted">
-                        {lang === "de"
-                          ? "Zum endgültigen Löschen bitte DELETE eingeben und die PIN dieses Profils bestätigen."
-                          : "To confirm deletion, please type DELETE and enter this profile's PIN."}
+                        {t(lang, "profile_delete_confirmation_hint")}
                       </p>
                       <div className="form-row" style={{ marginTop: "0.5rem" }}>
                         <input
@@ -2027,7 +2005,7 @@ const handleRestoreEncryptedBackup = async () => {
                           type="password"
                           value={profileDeletePinInput}
                           onChange={(e) => setProfileDeletePinInput(e.target.value)}
-                          placeholder={lang === "de" ? "PIN des Profils" : "Profile PIN"}
+                          placeholder={t(lang, "profile_delete_pin_placeholder")}
                           autoComplete="current-password"
                         />
                       </div>
@@ -2057,7 +2035,7 @@ const handleRestoreEncryptedBackup = async () => {
                           }
                           onClick={handleDeleteProfile}
                         >
-                          {lang === "de" ? "Profil löschen" : "Delete profile"}
+                          {t(lang, "profile_delete_button")}
                         </button>
                       </div>
                     </div>
@@ -2073,16 +2051,14 @@ const handleRestoreEncryptedBackup = async () => {
                           setProfileDeleteError(null);
                         }}
                       >
-                        {lang === "de" ? "Profil löschen" : "Delete profile"}
+                        {t(lang, "profile_delete_button")}
                       </button>
                     </div>
                   )}
                 </>
               ) : (
                 <p className="muted">
-                  {lang === "de"
-                    ? "Kein aktives Profil. Bitte zuerst ein Profil einrichten oder anmelden."
-                    : "No active profile. Please set up or log in to a profile first."}
+                  {t(lang, "no_active_profile_message")}
                 </p>
               )}
             </div>
@@ -2110,7 +2086,7 @@ const handleRestoreEncryptedBackup = async () => {
                   className="btn-secondary"
                   onClick={() => setIsSettingsOpen(false)}
                 >
-                  {lang === "de" ? "Schließen" : "Close"}
+                  {t(lang, "common_close")}
                 </button>
               </div>
             </section>
@@ -2768,7 +2744,7 @@ const handleRestoreEncryptedBackup = async () => {
             {upcomingWindowDays && (
               <span className="pill pill-info" style={{ marginLeft: "0.5rem" }}>
                 {t(lang, "expiring_window_prefix")}: {upcomingWindowDays}{" "}
-                {lang === "de" ? "Tage" : "days"}
+                {t(lang, "holding_period_days_suffix")}
               </span>
             )}
           </h3>
@@ -3166,7 +3142,7 @@ const handleRestoreEncryptedBackup = async () => {
         <div className="modal-backdrop">
           <div className="modal">
             <div className="modal-header">
-              <h2>{lang === "de" ? "Profil" : "Profile"}</h2>
+              <h2>{t(lang, "profile_section_title")}</h2>
               <button
                 type="button"
                 className="icon-button modal-close-button"
@@ -3177,15 +3153,13 @@ const handleRestoreEncryptedBackup = async () => {
               </button>
             </div>
             <p className="muted">
-              {lang === "de"
-                ? "Verwalte dein aktives Profil. Änderungen gelten nur für dieses Profil."
-                : "Manage your active profile. Changes apply only to this profile."}
+              {t(lang, "profile_active_description")}
             </p>
             <div className="profile-menu-active">
               {activeProfile ? (
                 <>
                   <p className="muted" style={{ marginTop: "0.75rem" }}>
-                    {lang === "de" ? "Aktives Profil:" : "Active profile:"}
+                    {t(lang, "profile_active_label")}
                   </p>
                   <p style={{ fontWeight: 600, marginTop: "0.25rem" }}>
                     {activeProfile.name}
@@ -3193,9 +3167,7 @@ const handleRestoreEncryptedBackup = async () => {
                 </>
               ) : (
                 <p className="muted" style={{ marginTop: "0.75rem" }}>
-                  {lang === "de"
-                    ? "Es ist aktuell kein Profil aktiv."
-                    : "There is currently no active profile."}
+                  {t(lang, "profile_active_empty_message")}
                 </p>
               )}
             </div>
@@ -3212,7 +3184,7 @@ const handleRestoreEncryptedBackup = async () => {
                     setIsProfileMenuOverlayOpen(false);
                   }}
                 >
-                  {lang === "de" ? "Profilname ändern" : "Rename profile"}
+                  {t(lang, "profile_rename_title")}
                 </button>
                 <button
                   type="button"
@@ -3226,7 +3198,7 @@ const handleRestoreEncryptedBackup = async () => {
                     setIsProfileMenuOverlayOpen(false);
                   }}
                 >
-                  {lang === "de" ? "PIN ändern" : "Change PIN"}
+                  {t(lang, "pin_change_title")}
                 </button>
                 <button
                   type="button"
@@ -3240,7 +3212,7 @@ const handleRestoreEncryptedBackup = async () => {
                     setIsProfileMenuOverlayOpen(false);
                   }}
                 >
-                  {lang === "de" ? "Weiteres Profil hinzufügen" : "Add another profile"}
+                  {t(lang, "profile_add_another")}
                 </button>
                 <button
                   type="button"
@@ -3257,7 +3229,7 @@ const handleRestoreEncryptedBackup = async () => {
                     setIsProfileMenuOverlayOpen(false);
                   }}
                 >
-                  {lang === "de" ? "Profil wechseln" : "Switch profile"}
+                  {t(lang, "profile_switch")}
                 </button>
               </div>
             )}
@@ -3277,11 +3249,9 @@ const handleRestoreEncryptedBackup = async () => {
       {isRenameProfileOverlayOpen && activeProfile && (
         <div className="modal-backdrop">
           <div className="modal">
-            <h2>{lang === "de" ? "Profilname ändern" : "Rename profile"}</h2>
+            <h2>{t(lang, "profile_rename_title")}</h2>
             <p className="muted">
-              {lang === "de"
-                ? "Ändere den Namen des aktiven Profils. Dies hat keinen Einfluss auf die gespeicherten Daten."
-                : "Change the name of the active profile. This does not affect the stored data."}
+              {t(lang, "profile_rename_description")}
             </p>
             {renameProfileError && (
               <p className="error-text modal-error">{renameProfileError}</p>
@@ -3293,7 +3263,7 @@ const handleRestoreEncryptedBackup = async () => {
               <div className="form-row">
                 <label className="form-label">
                   <span className="form-label-text">
-                    {lang === "de" ? "Neuer Profilname" : "New profile name"}
+                    {t(lang, "profile_rename_new_name_label")}
                   </span>
                   <input
                     type="text"
@@ -3315,7 +3285,7 @@ const handleRestoreEncryptedBackup = async () => {
                   {t(lang, "form_cancel")}
                 </button>
                 <button type="submit" className="btn-primary">
-                  {lang === "de" ? "Speichern" : "Save"}
+                  {t(lang, "common_save")}
                 </button>
               </div>
             </form>
@@ -3326,11 +3296,9 @@ const handleRestoreEncryptedBackup = async () => {
       {isPinChangeOverlayOpen && activeProfile && (
         <div className="modal-backdrop">
           <div className="modal">
-            <h2>{lang === "de" ? "PIN ändern" : "Change PIN"}</h2>
+            <h2>{t(lang, "pin_change_title")}</h2>
             <p className="muted">
-              {lang === "de"
-                ? "Ändere die PIN für dieses Profil. Die Profildaten bleiben erhalten und werden mit der neuen PIN geschützt."
-                : "Change the PIN for this profile. The profile data will stay the same and remain protected by the new PIN."}
+              {t(lang, "pin_change_description")}
             </p>
             {pinChangeError && (
               <p className="error-text modal-error">{pinChangeError}</p>
@@ -3342,7 +3310,7 @@ const handleRestoreEncryptedBackup = async () => {
               <div className="form-row">
                 <label className="form-label">
                   <span className="form-label-text">
-                    {lang === "de" ? "Aktuelle PIN" : "Current PIN"}
+                    {t(lang, "pin_change_current_label")}
                   </span>
                   <input
                     type="password"
@@ -3356,7 +3324,7 @@ const handleRestoreEncryptedBackup = async () => {
               <div className="form-row">
                 <label className="form-label">
                   <span className="form-label-text">
-                    {lang === "de" ? "Neue PIN" : "New PIN"}
+                    {t(lang, "pin_change_new_label")}
                   </span>
                   <input
                     type="password"
@@ -3370,7 +3338,7 @@ const handleRestoreEncryptedBackup = async () => {
               <div className="form-row">
                 <label className="form-label">
                   <span className="form-label-text">
-                    {lang === "de" ? "Neue PIN wiederholen" : "Repeat new PIN"}
+                    {t(lang, "pin_change_repeat_label")}
                   </span>
                   <input
                     type="password"
@@ -3396,7 +3364,7 @@ const handleRestoreEncryptedBackup = async () => {
                   {t(lang, "form_cancel")}
                 </button>
                 <button type="submit" className="btn-primary">
-                  {lang === "de" ? "PIN aktualisieren" : "Update PIN"}
+                  {t(lang, "pin_change_submit")}
                 </button>
               </div>
             </form>
@@ -3407,11 +3375,9 @@ const handleRestoreEncryptedBackup = async () => {
       {isCreateProfileOverlayOpen && (
         <div className="modal-backdrop">
           <div className="modal">
-            <h2>{lang === "de" ? "Weiteres Profil hinzufügen" : "Add another profile"}</h2>
+            <h2>{t(lang, "profile_add_another")}</h2>
             <p className="muted">
-              {lang === "de"
-                ? "Erstelle ein weiteres Profil mit eigener PIN. Daten und Einstellungen werden getrennt vom aktuellen Profil gespeichert."
-                : "Create another profile with its own PIN. Data and settings are stored separately from the current profile."}
+              {t(lang, "profile_add_another_description")}
             </p>
             {createProfileError && (
               <p className="error-text modal-error">{createProfileError}</p>
@@ -3468,7 +3434,7 @@ const handleRestoreEncryptedBackup = async () => {
                   {t(lang, "form_cancel")}
                 </button>
                 <button type="submit" className="btn-primary">
-                  {lang === "de" ? "Profil erstellen" : "Create profile"}
+                  {t(lang, "create_profile_submit")}
                 </button>
               </div>
             </form>
@@ -3488,7 +3454,7 @@ const handleRestoreEncryptedBackup = async () => {
             </p>
           </div>
           <div className="app-footer-section">
-            <h4>{lang === "de" ? "Datenschutz & Verschlüsselung" : "Privacy & Encryption"}</h4>
+            <h4>{t(lang, "footer_privacy_encryption_heading")}</h4>
             <p className="muted">
               {auth.mode === "local-only"
                 ? t(lang, "encryption_local_only")
