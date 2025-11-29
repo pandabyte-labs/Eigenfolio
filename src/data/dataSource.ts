@@ -59,6 +59,40 @@ function parseCsvLine(line: string): string[] {
   return result;
 }
 
+function normalizeCsvText(text: string): string {
+  let result = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    if (ch === '"') {
+      if (inQuotes && text[i + 1] === '"') {
+        result += ch;
+        i++;
+        result += text[i];
+        continue;
+      }
+      inQuotes = !inQuotes;
+      result += ch;
+      continue;
+    }
+
+    if ((ch === "\n" || ch === "\r") && inQuotes) {
+      result += " ";
+      if (ch === "\r" && text[i + 1] === "\n") {
+        i++;
+      }
+      continue;
+    }
+
+    result += ch;
+  }
+
+  return result;
+}
+
+
 /**
  * Abstraction layer for portfolio data access.
  *
@@ -170,7 +204,8 @@ class CloudDataSource implements PortfolioDataSource {
 
   async importCsv(lang: Language, file: File): Promise<CsvImportResult> {
     const text = await file.text();
-    const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    const normalized = normalizeCsvText(text);
+    const lines = normalized.split(/\r?\n/).filter((l) => l.trim().length > 0);
     if (lines.length < 2) {
       return { imported: 0, errors: ["CSV has no data rows."] };
     }
@@ -215,7 +250,10 @@ class CloudDataSource implements PortfolioDataSource {
         continue;
       }
 
-      const parts = row.split(delimiter);
+      const parts =
+        delimiter === ","
+          ? parseCsvLine(row)
+          : row.split(delimiter);
       if (parts.length !== headerCols.length) {
         errors.push(`${t(lang, "csv_import_error_line_prefix")} ${lineIndex + 1}: ${t(lang, "csv_import_error_column_mismatch")}`);
         continue;
@@ -633,16 +671,7 @@ async function enrichTransactionsWithBaseFiat(
       continue;
     }
 
-        const hasFiatCurrency =
-      typeof tx.fiat_currency === "string" &&
-      tx.fiat_currency.trim().length > 0;
-
-    if (!hasFiatCurrency) {
-      enriched.push(tx);
-      continue;
-    }
-
-let hist: { eur: number | null; usd: number | null } | null = null;
+    let hist: { eur: number | null; usd: number | null } | null = null;
     try {
       hist = await fetchHistoricalPriceForSymbol(symbol, baseCurrency, tx.timestamp);
     } catch (err) {
@@ -823,7 +852,8 @@ class LocalDataSource implements PortfolioDataSource {
 
   async importCsv(lang: Language, file: File): Promise<CsvImportResult> {
     const text = await file.text();
-    const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    const normalized = normalizeCsvText(text);
+    const lines = normalized.split(/\r?\n/).filter((l) => l.trim().length > 0);
     if (lines.length < 2) {
       return { imported: 0, errors: ["CSV has no data rows."] };
     }
@@ -868,7 +898,10 @@ class LocalDataSource implements PortfolioDataSource {
         continue;
       }
 
-      const parts = row.split(delimiter);
+      const parts =
+        delimiter === ","
+          ? parseCsvLine(row)
+          : row.split(delimiter);
       if (parts.length !== headerCols.length) {
         errors.push(`${t(lang, "csv_import_error_line_prefix")} ${lineIndex + 1}: ${t(lang, "csv_import_error_column_mismatch")}`);
         continue;

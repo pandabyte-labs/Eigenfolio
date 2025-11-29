@@ -413,14 +413,6 @@ useEffect(() => {
       setProfileSetupError(lang === "de" ? "Bitte gib eine PIN ein." : "Please enter a PIN.");
       return;
     }
-    if (profilePinInput.length < 8) {
-      setProfileSetupError(
-        lang === "de"
-          ? "Die PIN muss mindestens 8 Zeichen lang sein."
-          : "The PIN must be at least 8 characters long.",
-      );
-      return;
-    }
     if (profilePinInput !== profilePinConfirmInput) {
       setProfileSetupError(lang === "de" ? "Die PINs stimmen nicht überein." : "The PIN entries do not match.");
       return;
@@ -481,14 +473,6 @@ useEffect(() => {
 
     if (!createProfilePinInput || !createProfilePinConfirmInput) {
       setCreateProfileError(lang === "de" ? "Bitte gib eine PIN ein." : "Please enter a PIN.");
-      return;
-    }
-    if (createProfilePinInput.length < 8) {
-      setCreateProfileError(
-        lang === "de"
-          ? "Die PIN muss mindestens 8 Zeichen lang sein."
-          : "The PIN must be at least 8 characters long.",
-      );
       return;
     }
     if (createProfilePinInput !== createProfilePinConfirmInput) {
@@ -570,15 +554,6 @@ useEffect(() => {
     if (!pinChangeNewPinInput || !pinChangeNewPinConfirmInput) {
       setPinChangeError(
         lang === "de" ? "Bitte gib die neue PIN ein." : "Please enter the new PIN.",
-      );
-      return;
-    }
-
-    if (pinChangeNewPinInput.length < 8) {
-      setPinChangeError(
-        lang === "de"
-          ? "Die PIN muss mindestens 8 Zeichen lang sein."
-          : "The PIN must be at least 8 characters long.",
       );
       return;
     }
@@ -746,17 +721,11 @@ useEffect(() => {
     const amount = parsedAmount;
 
     let priceFiat: number | null = null;
-
-const upperTxType = (form.tx_type || "").toString().trim().toUpperCase();
-const isTransferTx =
-  upperTxType === "TRANSFER_IN" || upperTxType === "TRANSFER_OUT";
-const hasFiatCurrency =
-  typeof form.fiat_currency === "string" &&
-  form.fiat_currency.trim().length > 0;
-
 if (form.price_fiat) {
+  // User explicitly provided a price.
   priceFiat = parseFloat(form.price_fiat);
-} else if (!isTransferTx && hasFiatCurrency) {
+} else {
+  // First try to resolve a historical price based on the transaction timestamp.
   try {
     const hist = await fetchHistoricalPriceForSymbol(
       upperSymbol,
@@ -774,6 +743,8 @@ if (form.price_fiat) {
     console.warn("Failed to fetch historical price for transaction", err);
   }
 
+  // If we still have no price, fall back to the current price cache as a
+  // best-effort approximation.
   if (priceFiat == null) {
     const snapshot = getPriceCacheSnapshot();
     const cached = snapshot[upperSymbol];
@@ -940,7 +911,8 @@ const handleExportCsv = () => {
     config?.base_currency ?? "EUR",
   ]);
 
-  const escapeCell = (value: string) => `"${value.replace(/"/g, '""')}"`;
+  const escapeCell = (value: string) =>
+    `"${value.replace(/"/g, '""').replace(/\r?\n/g, " ")}"`;
   const csvLines = [
     headers.join(","),
     ...rows.map((row) => row.map(escapeCell).join(",")),
@@ -952,12 +924,8 @@ const handleExportCsv = () => {
   const url = window.URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  const profileName = activeProfile?.name || "profile";
-  const profileSlug =
-    profileName.trim().replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "") ||
-    "profile";
   const stamp = new Date().toISOString().slice(0, 10);
-  a.download = `Traeky_${profileSlug}_${stamp}.csv`;
+  a.download = `traeky-transactions-${stamp}.csv`;
   document.body.appendChild(a);
   a.click();
   a.remove();
@@ -1082,12 +1050,7 @@ const handleResetHoldingConfigToDefault = () => {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    const profileName = activeProfile?.name || "profile";
-    const profileSlug =
-      profileName.trim().replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "") ||
-      "profile";
-    const stamp = new Date().toISOString().slice(0, 10);
-    a.download = `Traeky_${profileSlug}_${stamp}.pdf`;
+    a.download = "crypto-transactions.pdf";
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -1555,7 +1518,6 @@ const handleRestoreEncryptedBackup = async () => {
                         autoComplete="new-password"
                       />
                     </label>
-                    <p className="muted">{t(lang, "profile_pin_hint")}</p>
                   </div>
                   <div className="form-row">
                     <label className="form-label">
@@ -3481,7 +3443,6 @@ const handleRestoreEncryptedBackup = async () => {
                     autoComplete="new-password"
                   />
                 </label>
-                <p className="muted">{t(lang, "profile_pin_hint")}</p>
               </div>
               <div className="form-row">
                 <label className="form-label">
