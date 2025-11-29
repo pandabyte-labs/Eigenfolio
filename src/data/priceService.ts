@@ -13,7 +13,7 @@ import type { HoldingsResponse } from "../domain/types";
 const COINGECKO_API = "https://api.coingecko.com/api/v3/simple/price";
 
 const SYMBOL_TO_COINGECKO_ID: Record<string, string> = {
-  IOTA: "iota"
+  IOTA: "iota",
   BTC: "bitcoin",
   ETH: "ethereum",
   SOL: "solana",
