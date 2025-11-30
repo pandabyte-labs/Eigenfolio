@@ -5,7 +5,7 @@
 Traeky is a privacy-friendly, self-hostable web app to track your crypto portfolio and generate a basic report.
 The UI runs entirely in your browser, data is stored locally, and encrypted backups can be created for safekeeping.
 
-> Cloud sync / "Traeky Cloud" integration is optional. In the standalone build described here, no portfolio data is sent to any third-party service unless you explicitly configure it.
+> online features / "Traeky" integration is optional. In the standalone build described here, no portfolio data is sent to any third-party service unless you explicitly configure it.
 
 ---
 
@@ -69,8 +69,8 @@ docker run --rm   -p 5173:5173   --name traeky-testing   pandabytelabs/traeky:te
 The app supports configuration via environment variables.
 
 - `TRAEKY_DISABLE_CLOUD_CONNECT` (legacy alias: `DISABLE_CLOUD_CONNECT`)
-  - `"true"` → disables cloud connect features in the standalone build
-  - `"false"` or unset → cloud connect may be enabled (depending on your backend configuration)
+  - `"true"` → disables online features features in the standalone build
+  - `"false"` or unset → online features may be enabled (depending on your backend configuration)
 
 - `TRAEKY_PROFILE_PIN_SALT`
   - Optional cryptographic salt used when hashing the profile PIN
@@ -85,7 +85,7 @@ The app supports configuration via environment variables.
     - `TRAEKY_ALLOWED_HOSTS=example.net,example.com`
     - `TRAEKY_ALLOWED_HOSTS=all` (or `true` / `*`) to allow all hosts
 
-Example with cloud connect disabled and a custom profile PIN salt:
+Example with online features disabled and a custom profile PIN salt:
 
 ```bash
 docker run --rm \

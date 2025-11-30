@@ -275,7 +275,7 @@ export type AssetPriceCache = Record<string, AssetPriceCacheEntry>;
  *
  * This snapshot can be embedded into portfolio backups so that historical
  * price information does not have to be fetched again from the public API
- * when restoring or syncing.
+ * when restoring or reloading data.
  */
 export function getPriceCacheSnapshot(): AssetPriceCache {
   ensurePriceCacheLoaded();
@@ -472,7 +472,7 @@ const upper = symbol.toUpperCase();
  * Hydrate the price cache from a previously stored snapshot.
  *
  * This is used when restoring from an encrypted backup or when loading data
- * that was synced from the Traeky Cloud. It allows the frontend to
+ * that was loaded from a remote service. It allows the frontend to
  * reuse historical token prices without additional API requests.
  */
 export function hydratePriceCache(snapshot: AssetPriceCache): void {

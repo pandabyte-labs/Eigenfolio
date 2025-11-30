@@ -1,8 +1,6 @@
 import { encryptJsonWithPassphrase, decryptJsonWithPassphrase, type EncryptedPayload } from "../crypto/cryptoService";
 
 // NOTE:
-// - The profile PIN is used only for authentication (verifying the user-entered PIN).
-// - The actual profile data is encrypted with a fixed application key, not the PIN hash.
 //   This avoids subtle issues where changing the PIN or salt would make old data unreadable.
 // - The PIN hash is stored separately in localStorage and compared during login.
 
