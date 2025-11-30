@@ -250,9 +250,6 @@ export function logoutActiveProfileSession(): void {
   activeProfile = null;
 }
 
-
-}
-
 async function persistActiveProfile(): Promise<void> {
   if (!activeProfile) return;
   const payload: ProfileDataPayload = activeProfile.data;
