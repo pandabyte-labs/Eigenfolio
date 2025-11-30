@@ -90,7 +90,6 @@ Example with online features disabled and a custom profile PIN salt:
 ```bash
 docker run --rm \
   -p 5173:5173 \
-  -e TRAEKY_DISABLE_CLOUD_CONNECT=true \
   -e TRAEKY_ALLOWED_HOSTS=myTraekyDomain.tld \
   -e TRAEKY_PROFILE_PIN_SALT=CHANGEMETOARANDOMSIXTYFOURCHARALPHANUMERICVALUE00000000000000000 \
   --name traeky \
