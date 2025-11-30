@@ -21,7 +21,7 @@ import { CURRENT_CSV_SCHEMA_VERSION, CSV_SCHEMA_VERSION_COLUMN } from "./data/cs
 import { Transaction, HoldingsItem, HoldingsResponse, CsvImportResult, AppConfig, ExpiringHolding } from "./domain/types";
 import { DEFAULT_HOLDING_PERIOD_DAYS, DEFAULT_UPCOMING_WINDOW_DAYS } from "./domain/config";
 import { getAssetMetadata, getTxExplorerUrl, normalizeAssetSymbol } from "./domain/assets";
-import { applyPricesToHoldings, setCoingeckoApiKey, getPriceCacheSnapshot, loadPriceCacheSnapshot, fetchHistoricalPriceForSymbol, getPriceApiStatus } from "./data/priceService";
+import { applyPricesToHoldings, setCoingeckoApiKey, loadPriceCacheSnapshot, fetchHistoricalPriceForSymbol, getPriceApiStatus } from "./data/priceService";
 import packageJson from "../package.json";
 
 const RESET_CONFIRMATION_WORD = "RESET";
@@ -702,44 +702,30 @@ useEffect(() => {
     const amount = parsedAmount;
 
     let priceFiat: number | null = null;
-if (form.price_fiat) {
-  // User explicitly provided a price.
-  priceFiat = parseFloat(form.price_fiat);
-} else {
-  // First try to resolve a historical price based on the transaction timestamp.
-  try {
-    const hist = await fetchHistoricalPriceForSymbol(
-      upperSymbol,
-      form.fiat_currency as any,
-      form.timestamp,
-    );
-    if (hist) {
-      if (form.fiat_currency === "USD" && hist.usd != null) {
-        priceFiat = hist.usd;
-      } else if (hist.eur != null) {
-        priceFiat = hist.eur;
+    if (form.price_fiat) {
+      // User explicitly provided a price.
+      priceFiat = parseFloat(form.price_fiat);
+    } else {
+      // First try to resolve a historical price based on the transaction timestamp.
+      try {
+        const hist = await fetchHistoricalPriceForSymbol(
+          upperSymbol,
+          form.fiat_currency as any,
+          form.timestamp,
+        );
+        if (hist) {
+          if (form.fiat_currency === "USD" && hist.usd != null) {
+            priceFiat = hist.usd;
+          } else if (hist.eur != null) {
+            priceFiat = hist.eur;
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to fetch historical price for transaction", err);
       }
     }
-  } catch (err) {
-    console.warn("Failed to fetch historical price for transaction", err);
-  }
 
-  // If we still have no price, fall back to the current price cache as a
-  // best-effort approximation.
-  if (priceFiat == null) {
-    const snapshot = getPriceCacheSnapshot();
-    const cached = snapshot[upperSymbol];
-    if (cached) {
-      if (form.fiat_currency === "USD" && cached.usd != null) {
-        priceFiat = cached.usd;
-      } else if (cached.eur != null) {
-        priceFiat = cached.eur;
-      }
-    }
-  }
-}
-
-const payload = {
+    const payload = {
       id: editingId,
       asset_symbol: upperSymbol,
       tx_type: form.tx_type,

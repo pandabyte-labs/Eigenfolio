@@ -1,5 +1,4 @@
 import jsPDF from "jspdf";
-import { API_BASE_URL, CONFIG_URL, fetchJson } from "./backendApi";
 import { applyPricesToHoldings, fetchHistoricalPriceForSymbol, setCoingeckoApiKey } from "./priceService";
 import type {
   AppConfig,
@@ -1495,7 +1494,7 @@ class LocalDataSource implements PortfolioDataSource {
 
       // Page break if needed
       if (y + rowHeight > pageHeight - marginBottom) {
-        doc.addPage({ orientation: "landscape" });
+      doc.addPage("a4", "landscape");
         doc.setFontSize(tableFontSize);
         drawHeader();
         rowIndex = 0;
@@ -1546,7 +1545,7 @@ wrapped.forEach((lines, idx) => {
     let disclaimerY = y + 8;
 
     if (disclaimerY + disclaimerLines.length * (lineHeight - 1) > pageHeight - marginBottom) {
-      doc.addPage({ orientation: "landscape" });
+      doc.addPage("a4", "landscape");
       disclaimerY = marginTop;
     }
 
