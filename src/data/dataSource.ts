@@ -140,8 +140,7 @@ export interface PortfolioDataSource {
     file: File,
   ): Promise<CsvImportResult>;
 }
- * Helpers for the local-only implementation.
- */
+
 const LS_TRANSACTIONS_KEY = "traeky:transactions";
 const LS_NEXT_ID_KEY = "traeky:next-tx-id";
 
