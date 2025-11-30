@@ -1,5 +1,5 @@
 /**
- * Frontend-only encryption helpers for local encrypted data (no sync).
+ * Frontend-only encryption helpers for local encrypted data (no remote transmission).
  *
  * IMPORTANT:
  * - This module is intentionally self-contained and does not talk to any

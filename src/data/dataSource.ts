@@ -97,7 +97,7 @@ function normalizeCsvText(text: string): string {
  * Abstraction layer for portfolio data access.
  *
  * This allows us to:
- * - use a backend-based implementation (Traeky backend / cloud),
+ * - use a backend-based implementation (Traeky backend),
  * - and a purely local implementation (local-only mode),
  *   without changing the UI components.
  */

@@ -2,7 +2,7 @@
  * Client-side data mode selection for Traeky.
  *
  * This module is responsible for deciding how the app stores data locally.
- * The current build operates purely in local-only mode (no network sync).
+ * The current build operates purely in local-only mode (no network access).
  * This keeps the app simple and privacy‑friendly.
  */
 export type DataSourceMode = "local-only";

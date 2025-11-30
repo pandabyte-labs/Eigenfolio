@@ -1744,7 +1744,7 @@ const handleReloadHoldingPrices = async () => {
                 className="pill pill-small"
                 title={t(lang, "header_mode_pill_local_hint")}
               >
-                {t(lang, "login_status_cloud")}
+                {t(lang, "login_status_local")}
               </span>
             )}
             {auth.isAuthenticated ? (
