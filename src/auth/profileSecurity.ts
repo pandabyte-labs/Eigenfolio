@@ -8,9 +8,17 @@ const rawProfilePinSalt =
   (import.meta.env.VITE_PROFILE_PIN_SALT as string | undefined) ??
   (import.meta.env.TRAEKY_PROFILE_PIN_SALT as string | undefined);
 
-const FIXED_PROFILE_PIN_SALT = rawProfilePinSalt ?? "";
-const FIXED_PROFILE_ENCRYPTION_KEY = "traeky-profile-encryption-key-v1";
+const PROFILE_PIN_SALT = rawProfilePinSalt ?? "";
 
+const rawProfileEncryptionKey =
+  (import.meta.env.VITE_PROFILE_ENCRYPTION_KEY as string | undefined) ??
+  (import.meta.env.TRAEKY_PROFILE_ENCRYPTION_KEY as string | undefined);
+
+if (!rawProfileEncryptionKey) {
+  throw new Error("Missing profile encryption key in environment");
+}
+
+const PROFILE_ENCRYPTION_KEY = rawProfileEncryptionKey;
 function getWebCrypto(): Crypto {
   if (typeof globalThis !== "undefined" && globalThis.crypto && "subtle" in globalThis.crypto) {
     return globalThis.crypto as Crypto;
@@ -30,7 +38,7 @@ function toHex(buffer: ArrayBuffer): string {
 
 export async function hashPin(pin: string): Promise<string> {
   const encoder = new TextEncoder();
-  const salt = FIXED_PROFILE_PIN_SALT;
+  const salt = PROFILE_PIN_SALT;
   const data = encoder.encode(`${salt}:${pin}`);
   const digest = await getWebCrypto().subtle.digest("SHA-256", data);
   const hex = toHex(digest);
@@ -39,10 +47,10 @@ export async function hashPin(pin: string): Promise<string> {
 
 export async function encryptProfilePayload<T>(pinHash: string, payload: T): Promise<EncryptedPayload> {
   // NOTE: pinHash is intentionally ignored here. We always use a fixed encryption key.
-  return encryptJsonWithPassphrase(payload, FIXED_PROFILE_ENCRYPTION_KEY);
+  return encryptJsonWithPassphrase(payload, PROFILE_ENCRYPTION_KEY);
 }
 
 export async function decryptProfilePayload<T>(pinHash: string, encrypted: EncryptedPayload): Promise<T> {
   // NOTE: pinHash is intentionally ignored here. We always use a fixed encryption key.
-  return decryptJsonWithPassphrase<T>(encrypted, FIXED_PROFILE_ENCRYPTION_KEY);
+  return decryptJsonWithPassphrase<T>(encrypted, PROFILE_ENCRYPTION_KEY);
 }

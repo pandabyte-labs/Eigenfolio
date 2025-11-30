@@ -250,6 +250,13 @@ export function logoutActiveProfileSession(): void {
   activeProfile = null;
 }
 
+
+function assertActiveProfile(): asserts activeProfile is ActiveProfileSession {
+  if (!activeProfile) {
+    throw new Error("No active profile session");
+  }
+}
+
 async function persistActiveProfile(): Promise<void> {
   if (!activeProfile) return;
   const payload: ProfileDataPayload = activeProfile.data;
@@ -377,39 +384,29 @@ export async function loginProfile(profileId: ProfileId, pin: string): Promise<P
 
 
 export function getActiveProfileConfig(): AppConfig {
-  if (!activeProfile) {
-    throw new Error("No active profile session");
-  }
+  assertActiveProfile();
   return activeProfile.data.config;
 }
 
 export function setActiveProfileConfig(config: AppConfig): void {
-  if (!activeProfile) {
-    throw new Error("No active profile session");
-  }
+  assertActiveProfile();
   activeProfile.data.config = config;
   void persistActiveProfile();
 }
 
 export function getActiveProfileTransactions(): Transaction[] {
-  if (!activeProfile) {
-    throw new Error("No active profile session");
-  }
+  assertActiveProfile();
   return activeProfile.data.transactions;
 }
 
 export function setActiveProfileTransactions(items: Transaction[]): void {
-  if (!activeProfile) {
-    throw new Error("No active profile session");
-  }
+  assertActiveProfile();
   activeProfile.data.transactions = items;
   void persistActiveProfile();
 }
 
 export function getNextActiveProfileTxId(): number {
-  if (!activeProfile) {
-    throw new Error("No active profile session");
-  }
+  assertActiveProfile();
   const id = activeProfile.data.nextTransactionId;
   activeProfile.data.nextTransactionId = id + 1;
   void persistActiveProfile();
@@ -462,25 +459,19 @@ export async function createAdditionalProfile(
 }
 
 export function resetActiveProfileData(): void {
-  if (!activeProfile) {
-    throw new Error("No active profile session");
-  }
+  assertActiveProfile();
   activeProfile.data = createEmptyProfileData();
   void persistActiveProfile();
 }
 
 export async function verifyActiveProfilePin(pin: string): Promise<boolean> {
-  if (!activeProfile) {
-    throw new Error("No active profile session");
-  }
+  assertActiveProfile();
   const candidateHash = await hashPin(pin);
   return candidateHash === activeProfile.pinHash;
 }
 
 export function renameActiveProfile(name: string): void {
-  if (!activeProfile) {
-    throw new Error("No active profile session");
-  }
+  assertActiveProfile();
   const trimmed = name.trim();
   if (!trimmed) {
     return;
@@ -496,6 +487,10 @@ export async function changeActiveProfilePin(
   currentPin: string,
   newPin: string,
 ): Promise<void> {
+  if (!activeProfile) {
+    throw new Error("No active profile session");
+  }
+  assertActiveProfile();
   const currentHash = await hashPin(currentPin);
   if (currentHash !== activeProfile.pinHash) {
     throw new Error("Invalid current PIN");
@@ -511,9 +506,7 @@ export async function changeActiveProfilePin(
 }
 
 export function deleteActiveProfile(): void {
-  if (!activeProfile) {
-    throw new Error("No active profile session");
-  }
+  assertActiveProfile();
   const index = readProfilesIndex();
   const idToDelete = activeProfile.meta.id;
 

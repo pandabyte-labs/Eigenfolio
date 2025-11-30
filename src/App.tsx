@@ -21,7 +21,7 @@ import { CURRENT_CSV_SCHEMA_VERSION, CSV_SCHEMA_VERSION_COLUMN } from "./data/cs
 import { Transaction, HoldingsItem, HoldingsResponse, CsvImportResult, AppConfig, ExpiringHolding } from "./domain/types";
 import { DEFAULT_HOLDING_PERIOD_DAYS, DEFAULT_UPCOMING_WINDOW_DAYS } from "./domain/config";
 import { getAssetMetadata, getTxExplorerUrl, normalizeAssetSymbol } from "./domain/assets";
-import { applyPricesToHoldings, setCoingeckoApiKey, loadPriceCacheSnapshot, fetchHistoricalPriceForSymbol, getPriceApiStatus } from "./data/priceService";
+import { applyPricesToHoldings, setCoingeckoApiKey, fetchHistoricalPriceForSymbol, getPriceApiStatus } from "./data/priceService";
 import packageJson from "../package.json";
 
 const RESET_CONFIRMATION_WORD = "RESET";
@@ -702,30 +702,30 @@ useEffect(() => {
     const amount = parsedAmount;
 
     let priceFiat: number | null = null;
-    if (form.price_fiat) {
-      // User explicitly provided a price.
-      priceFiat = parseFloat(form.price_fiat);
-    } else {
-      // First try to resolve a historical price based on the transaction timestamp.
-      try {
-        const hist = await fetchHistoricalPriceForSymbol(
-          upperSymbol,
-          form.fiat_currency as any,
-          form.timestamp,
-        );
-        if (hist) {
-          if (form.fiat_currency === "USD" && hist.usd != null) {
-            priceFiat = hist.usd;
-          } else if (hist.eur != null) {
-            priceFiat = hist.eur;
-          }
-        }
-      } catch (err) {
-        console.warn("Failed to fetch historical price for transaction", err);
+if (form.price_fiat) {
+  // User explicitly provided a price.
+  priceFiat = parseFloat(form.price_fiat);
+} else {
+  // First try to resolve a historical price based on the transaction timestamp.
+  try {
+    const hist = await fetchHistoricalPriceForSymbol(
+      upperSymbol,
+      form.fiat_currency as any,
+      form.timestamp,
+    );
+    if (hist) {
+      if (form.fiat_currency === "USD" && hist.usd != null) {
+        priceFiat = hist.usd;
+      } else if (hist.eur != null) {
+        priceFiat = hist.eur;
       }
     }
+  } catch (err) {
+    console.warn("Failed to fetch historical price for transaction", err);
+  }
+}
 
-    const payload = {
+const payload = {
       id: editingId,
       asset_symbol: upperSymbol,
       tx_type: form.tx_type,
@@ -1730,10 +1730,10 @@ const handleReloadHoldingPrices = async () => {
                 className="pill pill-small"
                 title={t(lang, "header_mode_pill_local_hint")}
               >
-                {t(lang, "login_status_local")}
+                {t(lang, "login_status_cloud")}
               </span>
             )}
-            {auth.isAuthenticated ? (
+            {auth.isAuthenticated && (
               <button
                 type="button"
                 className="btn-secondary"
@@ -1741,15 +1741,7 @@ const handleReloadHoldingPrices = async () => {
               >
                 {t(lang, "header_logout_button")}
               </button>
-            ) : null ? (
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={openAuthModal}
-              >
-                {t(lang, "header_login_button")}
-              </button>
-            ) : null}
+            )}
             <button
               type="button"
               className="icon-circle-button"
@@ -1778,7 +1770,7 @@ const handleReloadHoldingPrices = async () => {
                     type="button"
                     className="dropdown-item"
                     onClick={() => {
-                      setRenameProfileNameInput(activeProfile.name);
+                      setRenameProfileNameInput(activeProfile!.name);
                       setRenameProfileError(null);
                       setIsRenameProfileOverlayOpen(true);
                       setIsProfileMenuOverlayOpen(false);
@@ -2796,7 +2788,7 @@ const handleReloadHoldingPrices = async () => {
                   className="btn-secondary"
                   onClick={() => {
                     if (!activeProfile) return;
-                    setRenameProfileNameInput(activeProfile.name);
+                    setRenameProfileNameInput(activeProfile!.name);
                     setRenameProfileError(null);
                     setIsRenameProfileOverlayOpen(true);
                     setIsProfileMenuOverlayOpen(false);
