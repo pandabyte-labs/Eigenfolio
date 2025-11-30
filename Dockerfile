@@ -1,15 +1,17 @@
-FROM node:20-slim
+FROM node:24-slim
 
 WORKDIR /app
 
-# Install curl for healthcheck
+# curl für Healthcheck
 RUN apt-get update \
   && apt-get install -y curl \
   && rm -rf /var/lib/apt/lists/*
 
-COPY package.json ./
+# Wichtig: lockfile mitkopieren
+COPY package.json package-lock.json ./
 
-RUN npm install
+# Install exakt nach Lockfile
+RUN npm ci
 
 COPY . .
 

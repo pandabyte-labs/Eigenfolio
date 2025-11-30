@@ -21,7 +21,7 @@ export function getPreferredMode(): DataSourceMode {
   return "local-only";
 }
 
-export function setPreferredMode(mode: DataSourceMode): void {
+export function setPreferredMode(_mode: DataSourceMode): void {
   try {
     window.localStorage.setItem(STORAGE_KEY, "local-only");
   } catch {

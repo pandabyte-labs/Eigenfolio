@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useState } from "react";
 import type { DataSourceMode } from "../data/localStore";
 import { getPreferredMode, setPreferredMode } from "../data/localStore";

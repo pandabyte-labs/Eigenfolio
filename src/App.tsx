@@ -20,8 +20,8 @@ import { t, Language, getDefaultLanguage } from "./i18n";
 import { CURRENT_CSV_SCHEMA_VERSION, CSV_SCHEMA_VERSION_COLUMN } from "./data/csvSchema";
 import { Transaction, HoldingsItem, HoldingsResponse, CsvImportResult, AppConfig, ExpiringHolding } from "./domain/types";
 import { DEFAULT_HOLDING_PERIOD_DAYS, DEFAULT_UPCOMING_WINDOW_DAYS } from "./domain/config";
-import { getAssetMetadata, getTxExplorerUrl, normalizeAssetSymbol } from "./domain/assets";
-import { applyPricesToHoldings, setCoingeckoApiKey, getPriceCacheSnapshot, loadPriceCacheSnapshot, fetchHistoricalPriceForSymbol, getPriceApiStatus } from "./data/priceService";
+import { getAssetMetadata, getTxExplorerUrl } from "./domain/assets";
+import { applyPricesToHoldings, setCoingeckoApiKey, fetchHistoricalPriceForSymbol, getPriceApiStatus } from "./data/priceService";
 import packageJson from "../package.json";
 
 const RESET_CONFIRMATION_WORD = "RESET";
@@ -109,7 +109,7 @@ function holdingPeriodEndDate(tx: Transaction, holdingDays: number): Date | null
 }
 
 const App: React.FC = () => {
-  const { auth, openAuthModal, logout, isAuthModalOpen, closeAuthModal } = useAuth();
+  const { auth, logout, isAuthModalOpen, closeAuthModal } = useAuth();
   const dataSource: PortfolioDataSource = React.useMemo(
     () => createPortfolioDataSource(auth.mode),
     [auth.mode]
@@ -175,7 +175,7 @@ const App: React.FC = () => {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const displayHoldings = holdings.filter((h) => !isFiatAssetSymbol(h.asset_symbol));
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [, setError] = useState<string | null>(null);
   const [txFilterYear, setTxFilterYear] = useState<string>("");
   const [txFilterAsset, setTxFilterAsset] = useState<string>("");
   const [txFilterType, setTxFilterType] = useState<string>("");
@@ -424,7 +424,6 @@ useEffect(() => {
       setProfilePinConfirmInput("");
       setProfileSetupError(null);
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error("Failed to create initial profile", err);
       setProfileSetupError(
         t(lang, "profile_error_create_failed"),
@@ -454,7 +453,6 @@ useEffect(() => {
       setLoginError(null);
       setIsProfileLoginOverlayOpen(false);
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error("Failed to log into profile", err);
       setLoginError(t(lang, "pin_error_invalid"));
     }
@@ -487,7 +485,6 @@ useEffect(() => {
       setIsCreateProfileOverlayOpen(false);
       setCreateProfileError(null);
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error("Failed to create additional profile", err);
       setCreateProfileError(
         t(lang, "profile_error_create_failed"),
@@ -521,7 +518,6 @@ useEffect(() => {
       setProfileOverview(overview);
       setIsRenameProfileOverlayOpen(false);
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error("Failed to rename profile", err);
       setRenameProfileError(
         t(lang, "profile_error_rename_failed"),
@@ -561,7 +557,6 @@ useEffect(() => {
       setPinChangeNewPinConfirmInput("");
       setIsPinChangeOverlayOpen(false);
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error("Failed to change profile PIN", err);
       setPinChangeError(
         t(lang, "pin_change_error_current_invalid"),
@@ -576,7 +571,6 @@ useEffect(() => {
     try {
       resetActiveProfileData();
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error("Failed to reset profile data", err);
     }
     window.location.reload();
@@ -619,7 +613,6 @@ useEffect(() => {
         setLoginProfileId(null);
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
       console.error("Failed to delete profile", err);
       setProfileDeleteError(
         t(lang, "profile_error_delete_failed"),
@@ -708,9 +701,10 @@ if (form.price_fiat) {
 } else {
   // First try to resolve a historical price based on the transaction timestamp.
   try {
+    const fiatForHistory = form.fiat_currency === "USD" ? "USD" : "EUR";
     const hist = await fetchHistoricalPriceForSymbol(
       upperSymbol,
-      form.fiat_currency as any,
+      fiatForHistory,
       form.timestamp,
     );
     if (hist) {
@@ -722,20 +716,6 @@ if (form.price_fiat) {
     }
   } catch (err) {
     console.warn("Failed to fetch historical price for transaction", err);
-  }
-
-  // If we still have no price, fall back to the current price cache as a
-  // best-effort approximation.
-  if (priceFiat == null) {
-    const snapshot = getPriceCacheSnapshot();
-    const cached = snapshot[upperSymbol];
-    if (cached) {
-      if (form.fiat_currency === "USD" && cached.usd != null) {
-        priceFiat = cached.usd;
-      } else if (cached.eur != null) {
-        priceFiat = cached.eur;
-      }
-    }
   }
 }
 
@@ -912,11 +892,6 @@ const handleExportCsv = () => {
   a.remove();
   window.URL.revokeObjectURL(url);
 };
-  const handleCloseExternalImport = () => {
-    setShowExternalImport(false);
-    setExternalImportResult(null);
-    setExternalFileName(null);
-  };
 
   const handleSaveHoldingConfig = () => {
   if (!config) {
@@ -1107,11 +1082,6 @@ const handleReloadHoldingPrices = async () => {
   ) {
     portfolioUsd = portfolioEur * fxRateEurUsd;
   }
-
-  const holdingsValueHeader =
-    lang === "de"
-      ? t(lang, "holdings_col_value_eur")
-      : t(lang, "holdings_col_value_usd");
 
   return (
     <div className="layout">
@@ -1744,10 +1714,10 @@ const handleReloadHoldingPrices = async () => {
                 className="pill pill-small"
                 title={t(lang, "header_mode_pill_local_hint")}
               >
-                {t(lang, "login_status_local")}
+                {t(lang, "login_status_cloud")}
               </span>
             )}
-            {auth.isAuthenticated ? (
+            {auth.isAuthenticated && (
               <button
                 type="button"
                 className="btn-secondary"
@@ -1755,15 +1725,7 @@ const handleReloadHoldingPrices = async () => {
               >
                 {t(lang, "header_logout_button")}
               </button>
-            ) : null ? (
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={openAuthModal}
-              >
-                {t(lang, "header_login_button")}
-              </button>
-            ) : null}
+            )}
             <button
               type="button"
               className="icon-circle-button"
@@ -1792,7 +1754,7 @@ const handleReloadHoldingPrices = async () => {
                     type="button"
                     className="dropdown-item"
                     onClick={() => {
-                      setRenameProfileNameInput(activeProfile.name);
+                      setRenameProfileNameInput(activeProfile!.name);
                       setRenameProfileError(null);
                       setIsRenameProfileOverlayOpen(true);
                       setIsProfileMenuOverlayOpen(false);
@@ -2794,7 +2756,7 @@ const handleReloadHoldingPrices = async () => {
                     {t(lang, "profile_active_label")}
                   </p>
                   <p style={{ fontWeight: 600, marginTop: "0.25rem" }}>
-                    {activeProfile.name}
+                    {activeProfile!.name}
                   </p>
                 </>
               ) : (
@@ -2810,7 +2772,7 @@ const handleReloadHoldingPrices = async () => {
                   className="btn-secondary"
                   onClick={() => {
                     if (!activeProfile) return;
-                    setRenameProfileNameInput(activeProfile.name);
+                    setRenameProfileNameInput(activeProfile!.name);
                     setRenameProfileError(null);
                     setIsRenameProfileOverlayOpen(true);
                     setIsProfileMenuOverlayOpen(false);

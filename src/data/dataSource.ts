@@ -1,5 +1,4 @@
 import jsPDF from "jspdf";
-import { API_BASE_URL, CONFIG_URL, fetchJson } from "./backendApi";
 import { applyPricesToHoldings, fetchHistoricalPriceForSymbol, setCoingeckoApiKey } from "./priceService";
 import type {
   AppConfig,
@@ -17,12 +16,36 @@ import { getTxExplorerUrl } from "../domain/assets";
 import { getActiveProfileConfig, setActiveProfileConfig, getActiveProfileTransactions, setActiveProfileTransactions, getNextActiveProfileTxId } from "../auth/profileStore";
 
 
+type SheetJsModule = {
+  read: (
+    data: ArrayBuffer | Uint8Array | string,
+    opts?: {
+      type?: string;
+      cellDates?: boolean;
+      [key: string]: unknown;
+    }
+  ) => {
+    SheetNames: string[];
+    Sheets: Record<string, unknown>;
+  };
+  utils: {
+    sheet_to_json: <T = unknown>(
+      sheet: unknown,
+      opts?: {
+        header?: number;
+        defval?: unknown;
+        [key: string]: unknown;
+      }
+    ) => T[];
+  };
+};
 // Lazily loaded XLSX module so that it is only pulled in when needed.
-let xlsxModulePromise: Promise<any> | null = null;
+let xlsxModulePromise: Promise<SheetJsModule> | null = null;
 
-async function getXlsxModule(): Promise<any> {
+async function getXlsxModule(): Promise<SheetJsModule> {
   if (!xlsxModulePromise) {
     // Use locally vendored SheetJS CE 0.19.3 to avoid vulnerable npm xlsx.
+    // @ts-expect-error - vendored SheetJS module without full TypeScript types
     xlsxModulePromise = import("../vendor/sheetjs/xlsx.mjs");
   }
   return xlsxModulePromise;
@@ -140,11 +163,6 @@ export interface PortfolioDataSource {
     file: File,
   ): Promise<CsvImportResult>;
 }
-
-const LS_TRANSACTIONS_KEY = "traeky:transactions";
-const LS_NEXT_ID_KEY = "traeky:next-tx-id";
-
-const LS_CONFIG_KEY = "traeky:app-config";
 
 function loadLocalConfig(): AppConfig {
   try {
@@ -380,7 +398,7 @@ async function enrichTransactionsWithBaseFiat(
     let hist: { eur: number | null; usd: number | null } | null = null;
     try {
       hist = await fetchHistoricalPriceForSymbol(symbol, baseCurrency, tx.timestamp);
-    } catch (err) {
+    } catch {
       // If the price could not be fetched, keep the original transaction unchanged.
       enriched.push(tx);
       continue;
@@ -758,7 +776,7 @@ class LocalDataSource implements PortfolioDataSource {
         existingKeys.add(key);
         importedKeys.add(key);
         importedCount += 1;
-      } catch (err: any) {
+      } catch {
         errors.push(
           `${t(lang, "csv_import_error_line_prefix")} ${lineIndex + 1}: ${t(lang, "csv_import_unknown_error")}`,
         );
@@ -870,7 +888,7 @@ class LocalDataSource implements PortfolioDataSource {
           date = new Date(withZ);
         } else {
           // Fallback: let JS try to interpret it
-          date = new Date(rawDate as any);
+          date = new Date(String(rawDate));
         }
 
         if (isNaN(date.getTime())) {
@@ -1495,7 +1513,7 @@ class LocalDataSource implements PortfolioDataSource {
 
       // Page break if needed
       if (y + rowHeight > pageHeight - marginBottom) {
-        doc.addPage({ orientation: "landscape" });
+      doc.addPage("a4", "landscape");
         doc.setFontSize(tableFontSize);
         drawHeader();
         rowIndex = 0;
@@ -1546,7 +1564,7 @@ wrapped.forEach((lines, idx) => {
     let disclaimerY = y + 8;
 
     if (disclaimerY + disclaimerLines.length * (lineHeight - 1) > pageHeight - marginBottom) {
-      doc.addPage({ orientation: "landscape" });
+      doc.addPage("a4", "landscape");
       disclaimerY = marginTop;
     }
 

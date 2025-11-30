@@ -169,8 +169,6 @@ export const en: Record<string, string> = {
   external_import_missing_columns_prefix: "Missing columns:",
   external_import_done_button: "Done.",
   external_import_close_button: "Close",
-  form_pair_currency: "Trading pair (quote asset)",
-  form_pair_currency_placeholder: "e.g. EUR, USD, USDT, USDC, BTC …",
   price_config_section_title: "Price fetching (CoinGecko)",
   price_config_description: "Traeky can fetch current and historical prices via the CoinGecko API. For large imports this may hit rate limits or CORS issues.",
   price_config_enable_label: "Fetch prices via CoinGecko",
@@ -180,7 +178,6 @@ export const en: Record<string, string> = {
   price_config_api_warning: "Price fetching recently encountered issues (e.g. CORS / rate limit). The app will keep retrying with pauses. You can disable CoinGecko here or provide your own API key.",
   footer_copyright_brand: "Traeky",
   footer_madewith: "made with ❤️ by",
-
   profile_setup_title: "Set up profile",
   profile_setup_description: "Create a profile with a PIN. Your local data and settings will be encrypted and bound to this profile.",
   profile_setup_description_migrate: "Existing local data was found. It will be migrated into a profile and encrypted with your PIN.",
@@ -190,7 +187,6 @@ export const en: Record<string, string> = {
   profile_pin_confirm_label: "Repeat PIN",
   profile_setup_submit: "Create profile and start",
   profile_login_title: "Choose profile",
-  login_status_local: "Local mode",
   profile_login_description: "Select a profile and enter the PIN to unlock your data.",
   profile_login_select_label: "Profile",
   profile_login_pin_label: "PIN",
@@ -204,7 +200,6 @@ export const en: Record<string, string> = {
   profile_error_setup_failed: "Profile could not be created. Please try again.",
   profile_error_select_profile: "Please select a profile.",
   profile_error_invalid_pin: "PIN is invalid.",
-
   locale_code: "en-US",
   pin_error_required: "Please enter a PIN.",
   pin_error_mismatch: "The PIN entries do not match.",
