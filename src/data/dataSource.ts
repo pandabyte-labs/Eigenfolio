@@ -17,12 +17,14 @@ import { getActiveProfileConfig, setActiveProfileConfig, getActiveProfileTransac
 
 
 // Lazily loaded XLSX module so that it is only pulled in when needed.
-let xlsxModulePromise: Promise<any> | null = null;
+type XlsxModule = typeof import("../vendor/sheetjs/xlsx.mjs");
 
-async function getXlsxModule(): Promise<any> {
+let xlsxModulePromise: Promise<XlsxModule> | null = null;
+
+async function getXlsxModule(): Promise<XlsxModule> {
   if (!xlsxModulePromise) {
     // Use locally vendored SheetJS CE 0.19.3 to avoid vulnerable npm xlsx.
-    // @ts-ignore - vendored SheetJS module without full TypeScript types
+    // @ts-expect-error - vendored SheetJS module without full TypeScript types
     xlsxModulePromise = import("../vendor/sheetjs/xlsx.mjs");
   }
   return xlsxModulePromise;
@@ -140,11 +142,6 @@ export interface PortfolioDataSource {
     file: File,
   ): Promise<CsvImportResult>;
 }
-
-const LS_TRANSACTIONS_KEY = "traeky:transactions";
-const LS_NEXT_ID_KEY = "traeky:next-tx-id";
-
-const LS_CONFIG_KEY = "traeky:app-config";
 
 function loadLocalConfig(): AppConfig {
   try {
@@ -380,7 +377,7 @@ async function enrichTransactionsWithBaseFiat(
     let hist: { eur: number | null; usd: number | null } | null = null;
     try {
       hist = await fetchHistoricalPriceForSymbol(symbol, baseCurrency, tx.timestamp);
-    } catch (err) {
+    } catch {
       // If the price could not be fetched, keep the original transaction unchanged.
       enriched.push(tx);
       continue;
@@ -758,7 +755,7 @@ class LocalDataSource implements PortfolioDataSource {
         existingKeys.add(key);
         importedKeys.add(key);
         importedCount += 1;
-      } catch (err: any) {
+      } catch {
         errors.push(
           `${t(lang, "csv_import_error_line_prefix")} ${lineIndex + 1}: ${t(lang, "csv_import_unknown_error")}`,
         );
@@ -870,7 +867,7 @@ class LocalDataSource implements PortfolioDataSource {
           date = new Date(withZ);
         } else {
           // Fallback: let JS try to interpret it
-          date = new Date(rawDate as any);
+          date = new Date(String(rawDate));
         }
 
         if (isNaN(date.getTime())) {
