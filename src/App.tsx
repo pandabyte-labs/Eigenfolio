@@ -17,7 +17,6 @@ import {
   logoutActiveProfileSession,
 } from "./auth/profileStore";
 import { t, Language, getDefaultLanguage } from "./i18n";
-import { createPortfolioSnapshot, encryptSnapshotForCloud, decryptSnapshotFromCloud } from "./data/cloudSync";
 import { CURRENT_CSV_SCHEMA_VERSION, CSV_SCHEMA_VERSION_COLUMN } from "./data/csvSchema";
 import { Transaction, HoldingsItem, HoldingsResponse, CsvImportResult, AppConfig, ExpiringHolding } from "./domain/types";
 import { DEFAULT_HOLDING_PERIOD_DAYS, DEFAULT_UPCOMING_WINDOW_DAYS } from "./domain/config";
@@ -30,11 +29,7 @@ const RESET_CONFIRMATION_WORD = "RESET";
 const APP_VERSION = packageJson.version;
 const LOCAL_STORAGE_LANG_KEY = "traeky_lang";
 
-const rawDisableCloudConnect =
-  (import.meta.env.TRAEKY_DISABLE_CLOUD_CONNECT as string | undefined) ??
-  (import.meta.env.DISABLE_CLOUD_CONNECT as string | undefined);
 
-const CLOUD_CONNECT_ENABLED = rawDisableCloudConnect === "true" ? false : true;
 
 function formatTxTypeLabel(txType: string | null | undefined): string {
   const code = (txType || "").toUpperCase();
@@ -114,7 +109,7 @@ function holdingPeriodEndDate(tx: Transaction, holdingDays: number): Date | null
 }
 
 const App: React.FC = () => {
-  const { auth, openAuthModal, logout, isAuthModalOpen, loginWithPasskey, closeAuthModal, cloudClient } = useAuth();
+  const { auth, openAuthModal, logout, isAuthModalOpen, closeAuthModal } = useAuth();
   const dataSource: PortfolioDataSource = React.useMemo(
     () => createPortfolioDataSource(auth.mode),
     [auth.mode]
@@ -1078,347 +1073,7 @@ const handleReloadHoldingPrices = async () => {
   }
 };
 
-const handleDownloadEncryptedBackup = async () => {
-  try {
-    if (!config) {
-      alert(t(lang, "cloud_backup_error_no_config"));
-      return;
-    }
-    if (!transactions || transactions.length === 0) {
-      alert(t(lang, "cloud_backup_error_no_transactions"));
-      return;
-    }
 
-    const passphrase = window.prompt(t(lang, "cloud_backup_prompt_passphrase"));
-    if (!passphrase) {
-      return;
-    }
-
-    const assetPrices = getPriceCacheSnapshot();
-    const snapshot = createPortfolioSnapshot(config, transactions, assetPrices);
-    const encrypted = await encryptSnapshotForCloud(snapshot, passphrase);
-
-    const blob = new Blob([JSON.stringify(encrypted, null, 2)], {
-      type: "application/json;charset=utf-8",
-    });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    const stamp = new Date().toISOString().slice(0, 10);
-    a.href = url;
-    a.download = `traeky-cloud-backup-${stamp}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(url);
-  } catch (err) {
-    console.error("Failed to create encrypted cloud backup", err);
-    alert(t(lang, "cloud_backup_error_failed"));
-  }
-};
-const handleRestoreEncryptedBackup = async () => {
-  try {
-    const fileInput = document.createElement("input");
-    fileInput.type = "file";
-    fileInput.accept = "application/json,.json";
-
-    fileInput.onchange = async () => {
-      const file = fileInput.files && fileInput.files[0];
-      if (!file) {
-        return;
-      }
-
-      try {
-        const text = await file.text();
-        const payload = JSON.parse(text);
-
-        const passphrase = window.prompt(t(lang, "cloud_backup_prompt_passphrase"));
-        if (!passphrase) {
-          return;
-        }
-
-        const snapshot = await decryptSnapshotFromCloud(payload, passphrase);
-
-    // If the snapshot contains historical asset prices, hydrate the local
-    // price cache so that we can reuse these prices without additional
-    // external API calls.
-    if (snapshot.assetPrices && Object.keys(snapshot.assetPrices).length > 0) {
-      hydratePriceCache(snapshot.assetPrices);
-    }
-
-        if (!snapshot || typeof snapshot !== "object" || !Array.isArray(snapshot.transactions)) {
-          alert(t(lang, "cloud_backup_error_invalid_file"));
-          return;
-        }
-
-        const rawConfig = snapshot.config ?? {};
-        const safeConfig: AppConfig = {
-          holding_period_days:
-            typeof rawConfig.holding_period_days === "number" &&
-            Number.isFinite(rawConfig.holding_period_days) &&
-            rawConfig.holding_period_days >= 0
-              ? rawConfig.holding_period_days
-              : DEFAULT_HOLDING_PERIOD_DAYS,
-          upcoming_holding_window_days:
-            typeof rawConfig.upcoming_holding_window_days === "number" &&
-            Number.isFinite(rawConfig.upcoming_holding_window_days) &&
-            rawConfig.upcoming_holding_window_days > 0
-              ? rawConfig.upcoming_holding_window_days
-              : DEFAULT_UPCOMING_WINDOW_DAYS,
-          base_currency:
-            typeof rawConfig.base_currency === "string" &&
-            (rawConfig.base_currency === "EUR" || rawConfig.base_currency === "USD")
-              ? rawConfig.base_currency
-              : "EUR",
-        };
-
-        const normalized: Transaction[] = snapshot.transactions
-          .map((tx, index) => {
-            const amount = Number((tx as Transaction).amount ?? 0);
-            const ts = (tx as Transaction).timestamp;
-            if (!ts || !Number.isFinite(amount) || amount === 0) {
-              return null;
-            }
-            const id =
-              typeof (tx as Transaction).id === "number" &&
-              Number.isFinite((tx as Transaction).id) &&
-              (tx as Transaction).id > 0
-                ? (tx as Transaction).id
-                : index + 1;
-
-            return {
-              id,
-              asset_symbol: (tx as Transaction).asset_symbol || "UNKNOWN",
-              tx_type: (tx as Transaction).tx_type || "BUY",
-              amount,
-              price_fiat:
-                (tx as Transaction).price_fiat !== undefined
-                  ? (tx as Transaction).price_fiat
-                  : null,
-              fiat_currency: (tx as Transaction).fiat_currency || "EUR",
-              timestamp: ts,
-              source:
-                (tx as Transaction).source !== undefined
-                  ? (tx as Transaction).source
-                  : null,
-              note:
-                (tx as Transaction).note !== undefined ? (tx as Transaction).note : null,
-              tx_id:
-                (tx as Transaction).tx_id !== undefined ? (tx as Transaction).tx_id : null,
-              fiat_value:
-                (tx as Transaction).fiat_value !== undefined
-                  ? (tx as Transaction).fiat_value
-                  : null,
-              value_eur:
-                (tx as Transaction).value_eur !== undefined
-                  ? (tx as Transaction).value_eur
-                  : null,
-              value_usd:
-                (tx as Transaction).value_usd !== undefined
-                  ? (tx as Transaction).value_usd
-                  : null,
-            };
-          })
-          .filter((tx): tx is Transaction => tx !== null);
-
-        if (!normalized.length) {
-          alert(t(lang, "cloud_backup_error_no_transactions"));
-          return;
-        }
-
-        let holdings = computeLocalHoldings(normalized);
-        try {
-          holdings = await applyPricesToHoldings(holdings);
-        } catch (priceErr) {
-          console.warn("Failed to enrich holdings with prices for restored backup", priceErr);
-        }
-
-        const expiring = computeLocalExpiring(normalized, safeConfig);
-
-        // Persist restored transactions to local storage so that the data
-        // survives a page reload even before any cloud backend exists.
-        overwriteLocalTransactions(normalized);
-
-        setConfig(safeConfig);
-        setTransactions(normalized);
-        setHoldings(holdings.items ?? []);
-        setHoldingsPortfolioEur(holdings.portfolio_value_eur ?? null);
-        setHoldingsPortfolioUsd(holdings.portfolio_value_usd ?? null);
-        setFxRateEurUsd(holdings.fx_rate_eur_usd ?? null);
-        setExpiring(expiring);
-        setError(null);
-      } catch (err) {
-        console.error("Failed to restore encrypted cloud backup", err);
-        alert(t(lang, "cloud_backup_error_decrypt_failed"));
-      } finally {
-        fileInput.value = "";
-      }
-    };
-
-    fileInput.click();
-  } catch (err) {
-    console.error("Failed to open encrypted backup file picker", err);
-  }
-};
-  const handleCloudSyncPush = async () => {
-    if (!auth.isAuthenticated || !cloudClient) {
-      alert(t(lang, "cloud_sync_not_available_standalone"));
-      return;
-    }
-    try {
-      if (!config) {
-        alert(t(lang, "cloud_backup_error_no_config"));
-        return;
-      }
-      if (!transactions || transactions.length === 0) {
-        alert(t(lang, "cloud_backup_error_no_transactions"));
-        return;
-      }
-
-      const passphrase = window.prompt(t(lang, "cloud_sync_passphrase_prompt"));
-      if (!passphrase) {
-        return;
-      }
-
-      const assetPrices = getPriceCacheSnapshot();
-      const snapshot = createPortfolioSnapshot(config, transactions, assetPrices);
-      const encrypted = await encryptSnapshotForCloud(snapshot, passphrase);
-
-      await cloudClient.uploadEncryptedSnapshot(encrypted);
-
-      alert(t(lang, "cloud_sync_push_success_placeholder"));
-    } catch (err) {
-      console.error("Cloud sync push failed", err);
-      alert(t(lang, "cloud_sync_push_error_placeholder"));
-    }
-  };
-
-  const handleCloudSyncPull = async () => {
-    if (!auth.isAuthenticated || !cloudClient) {
-      alert(t(lang, "cloud_sync_not_available_standalone"));
-      return;
-    }
-    try {
-      const payload = await cloudClient.downloadLatestEncryptedSnapshot();
-      if (!payload) {
-        alert(t(lang, "cloud_sync_no_snapshot_placeholder"));
-        return;
-      }
-
-      const passphrase = window.prompt(t(lang, "cloud_sync_passphrase_prompt"));
-      if (!passphrase) {
-        return;
-      }
-
-      const snapshot = await decryptSnapshotFromCloud(payload, passphrase);
-
-      if (snapshot.assetPrices && Object.keys(snapshot.assetPrices).length > 0) {
-        hydratePriceCache(snapshot.assetPrices);
-      }
-
-      if (!snapshot || typeof snapshot !== "object" || !Array.isArray(snapshot.transactions)) {
-        alert(t(lang, "cloud_backup_error_invalid_file"));
-        return;
-      }
-
-      const rawConfig = snapshot.config ?? {};
-      const safeConfig: AppConfig = {
-        holding_period_days:
-          typeof rawConfig.holding_period_days === "number" &&
-          Number.isFinite(rawConfig.holding_period_days) &&
-          rawConfig.holding_period_days >= 0
-            ? rawConfig.holding_period_days
-            : DEFAULT_HOLDING_PERIOD_DAYS,
-        upcoming_holding_window_days:
-          typeof rawConfig.upcoming_holding_window_days === "number" &&
-          Number.isFinite(rawConfig.upcoming_holding_window_days) &&
-          rawConfig.upcoming_holding_window_days > 0
-            ? rawConfig.upcoming_holding_window_days
-            : DEFAULT_UPCOMING_WINDOW_DAYS,
-        base_currency:
-          typeof rawConfig.base_currency === "string" &&
-          (rawConfig.base_currency === "EUR" || rawConfig.base_currency === "USD")
-            ? rawConfig.base_currency
-            : "EUR",
-      };
-
-      const normalized: Transaction[] = snapshot.transactions
-        .map((tx, index) => {
-          const amount = typeof tx.amount === "number" && Number.isFinite(tx.amount) ? tx.amount : 0;
-          const timestamp = typeof tx.timestamp === "string" ? tx.timestamp : "";
-          if (!timestamp || amount === 0) {
-            return null;
-          }
-
-          return {
-            id: index + 1,
-            asset_symbol: typeof tx.asset_symbol === "string" && tx.asset_symbol
-              ? tx.asset_symbol.toUpperCase()
-              : "UNKNOWN",
-            tx_type: typeof tx.tx_type === "string" && tx.tx_type
-              ? tx.tx_type.toUpperCase()
-              : "BUY",
-            amount,
-            price_fiat:
-              typeof tx.price_fiat === "number" && Number.isFinite(tx.price_fiat)
-                ? tx.price_fiat
-                : null,
-            fiat_currency: typeof tx.fiat_currency === "string" && tx.fiat_currency
-              ? tx.fiat_currency
-              : "EUR",
-            timestamp,
-            source: typeof tx.source === "string" && tx.source ? tx.source : null,
-            note: typeof tx.note === "string" && tx.note ? tx.note : null,
-            tx_id: typeof tx.tx_id === "string" && tx.tx_id ? tx.tx_id : null,
-            fiat_value:
-              typeof (tx as any).fiat_value === "number" &&
-              Number.isFinite((tx as any).fiat_value)
-                ? (tx as any).fiat_value
-                : null,
-            value_eur:
-              typeof (tx as any).value_eur === "number" &&
-              Number.isFinite((tx as any).value_eur)
-                ? (tx as any).value_eur
-                : null,
-            value_usd:
-              typeof (tx as any).value_usd === "number" &&
-              Number.isFinite((tx as any).value_usd)
-                ? (tx as any).value_usd
-                : null,
-          };
-        })
-        .filter((tx): tx is Transaction => tx !== null);
-
-      if (normalized.length === 0) {
-        alert(t(lang, "cloud_backup_error_no_transactions"));
-        return;
-      }
-
-      const holdingsSnapshot = computeLocalHoldings(normalized);
-      let holdings = holdingsSnapshot;
-      try {
-        holdings = await applyPricesToHoldings(holdingsSnapshot);
-      } catch (priceErr) {
-        console.warn("Failed to enrich holdings with prices for cloud pull", priceErr);
-      }
-
-      const expiring = computeLocalExpiring(normalized, safeConfig);
-
-      overwriteLocalTransactions(normalized);
-      setConfig(safeConfig);
-      setTransactions(normalized);
-      setHoldings(holdings.items ?? []);
-      setHoldingsPortfolioEur(holdings.portfolio_value_eur ?? null);
-      setHoldingsPortfolioUsd(holdings.portfolio_value_usd ?? null);
-      setFxRateEurUsd(holdings.fx_rate_eur_usd ?? null);
-      setExpiring(expiring);
-      setError(null);
-
-      alert(t(lang, "cloud_sync_pull_success_placeholder"));
-    } catch (err) {
-      console.error("Cloud sync pull failed", err);
-      alert(t(lang, "cloud_sync_pull_error_placeholder"));
-    }
-  };
 
 
 
@@ -1594,33 +1249,12 @@ const handleRestoreEncryptedBackup = async () => {
       
 
       
-        {CLOUD_CONNECT_ENABLED && isAuthModalOpen && (
+        {isAuthModalOpen && (
           <div className="modal-backdrop">
             <div className="modal">
               <h2>{t(lang, "login_title")}</h2>
               <p>{t(lang, "login_description")}</p>
               <p className="muted">{t(lang, "login_encryption_notice")}</p>
-              <p className="muted">{t(lang, "login_2fa_hint")}</p>
-              <div style={{ marginTop: "1rem" }}>
-                <button
-                  type="button"
-                  className="btn-primary"
-                  onClick={loginWithPasskey}
-                >
-                  {t(lang, "login_passkey_cta")}
-                </button>
-              </div>
-              <div style={{ marginTop: "1rem" }}>
-                <label className="form-label">
-                  {t(lang, "login_2fa_label")}
-                  <input
-                    type="text"
-                    className="input"
-                    placeholder={t(lang, "login_2fa_placeholder")}
-                    disabled
-                  />
-                </label>
-              </div>
               <div style={{ marginTop: "1rem" }}>
                 <button
                   type="button"
@@ -2101,18 +1735,16 @@ const handleRestoreEncryptedBackup = async () => {
               <span className="version-badge">v{APP_VERSION}</span>
             </div>
             <p className="header-mode-explainer">
-              {auth.isAuthenticated
-                ? t(lang, "header_mode_explainer_cloud")
-                : t(lang, "header_mode_explainer_local")}
+                            {t(lang, "header_mode_explainer_local")}
             </p>
           </div>
           <div className="header-right">
             {auth.isAuthenticated && (
               <span
                 className="pill pill-small"
-                title={t(lang, "header_mode_pill_cloud_hint")}
+                title={t(lang, "header_mode_pill_local_hint")}
               >
-                {t(lang, "login_status_cloud")}
+                {t(lang, "login_status_local")}
               </span>
             )}
             {auth.isAuthenticated ? (
@@ -2123,7 +1755,7 @@ const handleRestoreEncryptedBackup = async () => {
               >
                 {t(lang, "header_logout_button")}
               </button>
-            ) : CLOUD_CONNECT_ENABLED ? (
+            ) : null ? (
               <button
                 type="button"
                 className="btn-primary"
@@ -3456,15 +3088,10 @@ const handleRestoreEncryptedBackup = async () => {
           <div className="app-footer-section">
             <h4>{t(lang, "footer_privacy_encryption_heading")}</h4>
             <p className="muted">
-              {auth.mode === "local-only"
-                ? t(lang, "encryption_local_only")
-                : t(lang, "encryption_cloud_demo")}
+                            {t(lang, "encryption_local_only")}
             </p>
             <p className="muted">
               {t(lang, "encryption_key_hint")}
-            </p>
-            <p className="muted">
-              {t(lang, "local_mode_notice")}
             </p>
           </div>
         </div>

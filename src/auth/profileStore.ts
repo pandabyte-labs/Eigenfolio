@@ -342,11 +342,9 @@ export async function loginProfile(profileId: ProfileId, pin: string): Promise<P
   const pinIndex = readProfilePinIndex();
   const pinHash = await hashPin(pin);
 
-  // 1) Try selected profile with matching PIN hash
   let meta: ProfileSummary | null =
     index.profiles.find((p) => p.id === profileId && pinIndex[p.id] === pinHash) ?? null;
 
-  // 2) Fallback: search any profile with this PIN hash
   if (!meta) {
     meta = index.profiles.find((p) => pinIndex[p.id] === pinHash) ?? null;
   }
@@ -522,4 +520,3 @@ export function deleteActiveProfile(): void {
 
   activeProfile = null;
 }
-

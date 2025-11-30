@@ -3,10 +3,10 @@
  *
  * This module provides a small wrapper around the Web Crypto API so that
  * sensitive portfolio data can be encrypted locally before being sent to any
- * cloud service.
+ * remote service.
  *
  * IMPORTANT:
- * - This is a frontend-only utility. Keys MUST NOT be sent to the cloud.
+ * - This is a frontend-only utility. Keys MUST NOT be sent to any remote service.
  * - Key management (rotation, backup, recovery) will be defined in a later
  *   step together with the backend protocol.
  */

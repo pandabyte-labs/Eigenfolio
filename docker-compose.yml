@@ -6,7 +6,6 @@ services:
     ports:
       - "5173:5173"
     environment:
-      TRAEKY_DISABLE_CLOUD_CONNECT: "false"
       TRAEKY_PROFILE_PIN_SALT: "changeme"
       TRAEKY_ALLOWED_HOSTS: "all" # Default: allow all hosts (recommended to override in production)
     healthcheck:
