@@ -3093,9 +3093,6 @@ const handleReloadHoldingPrices = async () => {
             <p className="muted">
               {t(lang, "encryption_key_hint")}
             </p>
-            <p className="muted">
-              {t(lang, "local_mode_notice")}
-            </p>
           </div>
         </div>
       </footer>
