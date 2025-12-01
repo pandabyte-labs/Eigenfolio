@@ -1158,7 +1158,7 @@ const handleReloadHoldingPrices = async () => {
               </>
             ) : (
               <>
-                <h2>{t(lang, "profile_login_title")}</h2>
+                <h2>Traeky</h2>
                 <p className="muted">{t(lang, "profile_login_description")}</p>
                 {loginError && <p className="error-text modal-error">{loginError}</p>}
                 <form

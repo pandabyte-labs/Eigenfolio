@@ -187,7 +187,6 @@ export const de: Record<string, string> = {
   profile_pin_label: "PIN",
   profile_pin_confirm_label: "PIN wiederholen",
   profile_setup_submit: "Profil erstellen und starten",
-  profile_login_title: "Profil auswählen",
   profile_login_description: "Wähle ein Profil und gib die zugehörige PIN ein, um deine Daten zu entsperren.",
   profile_login_select_label: "Profil",
   profile_login_pin_label: "PIN",
