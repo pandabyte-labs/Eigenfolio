@@ -1237,7 +1237,8 @@ const handleReloadHoldingPrices = async () => {
               >
                 PANDABYTE
               </a>
-              <span className="modal-footer-version"> · Version {APP_VERSION}</span>
+              <br></br>
+              <span className="modal-footer-version">Version {APP_VERSION}</span>
             </p>
           </div>
         </div>
