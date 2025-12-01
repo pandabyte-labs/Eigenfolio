@@ -181,6 +181,7 @@ export const de: Record<string, string> = {
   profile_setup_title: "Profil einrichten",
   profile_setup_description: "Lege ein Profil mit einer PIN an. Deine lokalen Daten und Einstellungen werden verschlüsselt und diesem Profil zugeordnet.",
   profile_setup_description_migrate: "Wir haben bestehende lokale Daten gefunden. Diese werden in ein Profil migriert und mit deiner PIN verschlüsselt.",
+  profile_setup_security_info: "Traeky ist ein Open-Source, selbst hostbares Crypto-Tracking-Tool. Alle Portfolio-Daten werden lokal im Browser verschlüsselt gespeichert – dein PIN dient als Sicherheitsschlüssel. Es werden keine persönlichen Daten an externe Server gesendet; lediglich Kurs- und Marktdaten werden von CoinGecko abgerufen.",
   profile_name_label: "Profilname",
   profile_name_placeholder: "z.B. Privat, Steuer, Familie",
   profile_pin_label: "PIN",

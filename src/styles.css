@@ -1247,6 +1247,31 @@ body {
 .modal-error {
   margin-top: 0.5rem;
 }
+.modal-footer-bar {
+  position: fixed;
+  bottom: 0.75rem;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  z-index: 55;
+}
+
+.modal-footer-bar a {
+  color: inherit;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.modal-footer-bar a:hover {
+  text-decoration: underline;
+}
+
+.modal-footer-version {
+  opacity: 0.9;
+}
+
 
 
 
