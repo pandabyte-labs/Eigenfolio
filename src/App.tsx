@@ -1099,7 +1099,7 @@ const handleReloadHoldingPrices = async () => {
               <>
                 <h2>Traeky</h2>
                 <p className="muted">{t(lang, "profile_setup_security_info")}</p>
-                <h2>{t(lang, "profile_setup_title")}</h2>
+                <h3>{t(lang, "profile_setup_title")}</h3>
                 <p className="muted">{t(lang, "profile_setup_description")}</p>
                 {profileOverview.hasLegacyData && (
                   <p className="muted" style={{ marginTop: "0.5rem" }}>
@@ -1220,7 +1220,7 @@ const handleReloadHoldingPrices = async () => {
               </>
             )}
           </div>
-          <div className="modal-footer-bar">
+          <div className="modal-footer-brand">
             <p>
               <a
                 href="https://github.com/pandabytelabs/traeky"
@@ -1237,9 +1237,8 @@ const handleReloadHoldingPrices = async () => {
               >
                 PANDABYTE
               </a>
-              <br></br>
-              <span className="modal-footer-version">Version {APP_VERSION}</span>
             </p>
+            <p className="modal-footer-version">Version {APP_VERSION}</p>
           </div>
         </div>
       )}
