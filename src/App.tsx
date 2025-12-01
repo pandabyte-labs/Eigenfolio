@@ -1097,7 +1097,9 @@ const handleReloadHoldingPrices = async () => {
           <div className="modal">
             {profileOverview.profiles.length === 0 ? (
               <>
-                <h2>{t(lang, "profile_setup_title")}</h2>
+                <h2>Traeky</h2>
+                <p className="muted">{t(lang, "profile_setup_security_info")}</p>
+                <h3>{t(lang, "profile_setup_title")}</h3>
                 <p className="muted">{t(lang, "profile_setup_description")}</p>
                 {profileOverview.hasLegacyData && (
                   <p className="muted" style={{ marginTop: "0.5rem" }}>
@@ -1156,7 +1158,7 @@ const handleReloadHoldingPrices = async () => {
               </>
             ) : (
               <>
-                <h2>{t(lang, "profile_login_title")}</h2>
+                <h2>Traeky</h2>
                 <p className="muted">{t(lang, "profile_login_description")}</p>
                 {loginError && <p className="error-text modal-error">{loginError}</p>}
                 <form
@@ -1217,6 +1219,26 @@ const handleReloadHoldingPrices = async () => {
                 </form>
               </>
             )}
+          </div>
+          <div className="modal-footer-brand">
+            <p>
+              <a
+                href="https://github.com/pandabytelabs/traeky"
+                target="_blank"
+                rel="noreferrer"
+              >
+                {t(lang, "footer_copyright_brand")}
+              </a>
+              <span> {t(lang, "footer_madewith")} </span>
+              <a
+                href="https://pandabyte.net"
+                target="_blank"
+                rel="noreferrer"
+              >
+                PANDABYTE
+              </a>
+            </p>
+            <p className="modal-footer-version">Version {APP_VERSION}</p>
           </div>
         </div>
       )}
