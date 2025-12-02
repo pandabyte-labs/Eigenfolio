@@ -1097,11 +1097,6 @@ const handleReloadHoldingPrices = async () => {
 
   return (
     <div className="layout">
-      {error && (
-        <div className="card" style={{ marginBottom: "1rem" }}>
-          <p className="error-text">{error}</p>
-        </div>
-      )}
       {profileOverview &&
         (profileOverview.profiles.length === 0 ||
           (profileOverview.profiles.length > 0 && (!activeProfile || isProfileLoginOverlayOpen))) && (
@@ -2527,6 +2522,11 @@ const handleReloadHoldingPrices = async () => {
             <h3>
               {editingId ? t(lang, "form_title_edit") : t(lang, "form_title_new")}
             </h3>
+            {error && (
+              <p className="error-text" style={{ marginTop: "0.5rem" }}>
+                {error}
+              </p>
+            )}
             <form className="form" onSubmit={handleSubmit}>
               <div className="form-row">
                 <label>{t(lang, "form_asset")}</label>
