@@ -239,6 +239,8 @@ export const en: Record<string, string> = {
   profile_error_delete_failed: "Could not delete profile.",
   tx_error_amount_required: "Please enter an amount.",
   tx_error_amount_positive: "Please enter a valid amount greater than 0.",
+  tx_error_asset_required: "Please enter an asset symbol or name.",
+  tx_error_asset_unknown: "Unknown asset. Please enter one of the supported assets (e.g. BTC or Bitcoin).",
   profile_select_placeholder: "Select a profile…",
   settings_description: "Manage language, fiat currency, CSV import and export, holding period, price fetching and local data.",
   profile_delete_description: "This profile and all of its local data will be removed. Other profiles are not affected.",

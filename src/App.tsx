@@ -175,7 +175,7 @@ const App: React.FC = () => {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const displayHoldings = holdings.filter((h) => !isFiatAssetSymbol(h.asset_symbol));
   const [loading, setLoading] = useState(true);
-  const [, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [txFilterYear, setTxFilterYear] = useState<string>("");
   const [txFilterAsset, setTxFilterAsset] = useState<string>("");
   const [txFilterType, setTxFilterType] = useState<string>("");
@@ -670,78 +670,85 @@ useEffect(() => {
     setEditingId(null);
   };
 
+
   const handleSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
-  try {
-    setError(null);
+    e.preventDefault();
+    try {
+      setError(null);
 
-    const rawAmount = (form.amount ?? "").toString().trim();
-    if (!rawAmount) {
-      setError(
-        t(lang, "tx_error_amount_required")
-      );
-      return;
-    }
-
-    const parsedAmount = parseFloat(rawAmount.replace(",", "."));
-    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
-      setError(
-        t(lang, "tx_error_amount_positive")
-      );
-      return;
-    }
-
-    const upperSymbol = form.asset_symbol.trim().toUpperCase();
-    const amount = parsedAmount;
-
-    let priceFiat: number | null = null;
-if (form.price_fiat) {
-  // User explicitly provided a price.
-  priceFiat = parseFloat(form.price_fiat);
-} else {
-  // First try to resolve a historical price based on the transaction timestamp.
-  try {
-    const fiatForHistory = form.fiat_currency === "USD" ? "USD" : "EUR";
-    const hist = await fetchHistoricalPriceForSymbol(
-      upperSymbol,
-      fiatForHistory,
-      form.timestamp,
-    );
-    if (hist) {
-      if (form.fiat_currency === "USD" && hist.usd != null) {
-        priceFiat = hist.usd;
-      } else if (hist.eur != null) {
-        priceFiat = hist.eur;
+      const rawAmount = (form.amount ?? "").toString().trim();
+      if (!rawAmount) {
+        setError(t(lang, "tx_error_amount_required"));
+        return;
       }
+
+      const parsedAmount = parseFloat(rawAmount.replace(",", "."));
+      if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+        setError(t(lang, "tx_error_amount_positive"));
+        return;
+      }
+
+      const rawAsset = (form.asset_symbol ?? "").toString().trim();
+      if (!rawAsset) {
+        setError(t(lang, "tx_error_asset_required"));
+        return;
+      }
+
+      const meta = getAssetMetadata(rawAsset);
+      if (!meta) {
+        setError(t(lang, "tx_error_asset_unknown"));
+        return;
+      }
+
+      const upperSymbol = meta.symbol;
+      const amount = parsedAmount;
+
+      let priceFiat: number | null = null;
+      if (form.price_fiat) {
+        priceFiat = parseFloat(form.price_fiat);
+      } else {
+        try {
+          const fiatForHistory = form.fiat_currency === "USD" ? "USD" : "EUR";
+          const hist = await fetchHistoricalPriceForSymbol(
+            upperSymbol,
+            fiatForHistory,
+            form.timestamp,
+          );
+          if (hist) {
+            if (form.fiat_currency === "USD" && hist.usd != null) {
+              priceFiat = hist.usd;
+            } else if (hist.eur != null) {
+              priceFiat = hist.eur;
+            }
+          }
+        } catch (err) {
+          console.warn("Failed to fetch historical price for transaction", err);
+        }
+      }
+
+      const payload = {
+        id: editingId,
+        asset_symbol: upperSymbol,
+        tx_type: form.tx_type,
+        amount,
+        price_fiat: priceFiat,
+        fiat_currency: form.fiat_currency,
+        timestamp: form.timestamp,
+        source: form.source || null,
+        note: form.note || null,
+        tx_id: form.tx_id || null,
+      };
+
+      await dataSource.saveTransaction(payload);
+
+      resetForm();
+      await fetchData();
+      setShowTransactionForm(false);
+    } catch (err) {
+      console.error(err);
+      setError(t(lang, "error_save_tx"));
     }
-  } catch (err) {
-    console.warn("Failed to fetch historical price for transaction", err);
-  }
-}
-
-const payload = {
-      id: editingId,
-      asset_symbol: upperSymbol,
-      tx_type: form.tx_type,
-      amount,
-      price_fiat: priceFiat,
-      fiat_currency: form.fiat_currency,
-      timestamp: form.timestamp,
-      source: form.source || null,
-      note: form.note || null,
-      tx_id: form.tx_id || null,
-    };
-
-    await dataSource.saveTransaction(payload);
-
-    resetForm();
-    await fetchData();
-    setShowTransactionForm(false);
-  } catch (err) {
-    console.error(err);
-    setError(t(lang, "error_save_tx"));
-  }
-};
+  };
 
   const handleDelete = async (txId: number) => {
   if (!window.confirm(t(lang, "tx_delete_confirm"))) {
@@ -2515,6 +2522,11 @@ const handleReloadHoldingPrices = async () => {
             <h3>
               {editingId ? t(lang, "form_title_edit") : t(lang, "form_title_new")}
             </h3>
+            {error && (
+              <p className="error-text" style={{ marginTop: "0.5rem" }}>
+                {error}
+              </p>
+            )}
             <form className="form" onSubmit={handleSubmit}>
               <div className="form-row">
                 <label>{t(lang, "form_asset")}</label>

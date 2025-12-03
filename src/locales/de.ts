@@ -239,6 +239,8 @@ export const de: Record<string, string> = {
   profile_error_delete_failed: "Das Profil konnte nicht gelöscht werden.",
   tx_error_amount_required: "Bitte einen Betrag eingeben.",
   tx_error_amount_positive: "Bitte einen gültigen Betrag größer als 0 eingeben.",
+  tx_error_asset_required: "Bitte ein Asset-Kürzel oder einen Namen eingeben.",
+  tx_error_asset_unknown: "Unbekanntes Asset. Bitte eines der unterstützten Assets eingeben (z. B. BTC oder Bitcoin).",
   profile_select_placeholder: "Profil auswählen…",
   settings_description: "Verwalte Sprache, Fiat-Währung, CSV-Import und -Export, Haltefrist, Preisabfrage und lokale Daten.",
   profile_delete_description: "Dieses Profil und alle zugehörigen lokalen Daten werden gelöscht. Andere Profile sind davon nicht betroffen.",
