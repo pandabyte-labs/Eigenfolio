@@ -1008,7 +1008,7 @@ class LocalDataSource implements PortfolioDataSource {
 
 
   
-function mergeBitpandaInternalTransfers(transactions: Transaction[]): Transaction[] {
+  mergeBitpandaInternalTransfers(transactions: Transaction[]): Transaction[] {
   const remaining: Transaction[] = [];
   const grouped = new Map<string, Transaction[]>();
 
@@ -1377,7 +1377,7 @@ async importBitpandaCsv(lang: Language, file: File): Promise<CsvImportResult> {
       }
     }
 
-    const finalNewItems = mergeBitpandaInternalTransfers(newItems);
+    const finalNewItems = this.mergeBitpandaInternalTransfers(newItems);
     const allItems = existingItems.concat(finalNewItems);
 
     saveLocalTransactions(allItems);
