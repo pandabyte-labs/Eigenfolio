@@ -12,7 +12,7 @@ import type { DataSourceMode } from "./localStore";
 import { DEFAULT_HOLDING_PERIOD_DAYS, DEFAULT_UPCOMING_WINDOW_DAYS } from "../domain/config";
 import { CURRENT_CSV_SCHEMA_VERSION, CSV_SCHEMA_VERSION_COLUMN } from "./csvSchema";
 import { t } from "../i18n";
-import { getTxExplorerUrl } from "../domain/assets";
+import { getAssetMetadata, getTxExplorerUrl } from "../domain/assets";
 import { getActiveProfileConfig, setActiveProfileConfig, getActiveProfileTransactions, setActiveProfileTransactions, getNextActiveProfileTxId } from "../auth/profileStore";
 
 
@@ -923,6 +923,16 @@ class LocalDataSource implements PortfolioDataSource {
         const baseAsset = String(rawBase || "").trim().toUpperCase();
         const quoteAsset = String(rawQuote || "").trim().toUpperCase();
 
+        if (!getAssetMetadata(baseAsset)) {
+          errors.push(
+            `${t(lang, "csv_import_error_line_prefix")} ${rowIndex}: ${t(
+              lang,
+              "external_import_unsupported_asset_prefix",
+            )} ${baseAsset}`,
+          );
+          return;
+        }
+
         const typeUpper = String(rawType || "").toUpperCase();
         let txType = "BUY";
         if (typeUpper.includes("SELL")) {
@@ -1109,6 +1119,15 @@ class LocalDataSource implements PortfolioDataSource {
         const amountAsset = parseFloat(record["Amount Asset"] || "0");
         if (!assetSymbol || !Number.isFinite(amountAsset) || amountAsset === 0) {
           // Rows without a meaningful crypto amount are ignored.
+          continue;
+        }
+
+        if (!getAssetMetadata(assetSymbol)) {
+          errors.push(
+            `${t(lang, "csv_import_error_line_prefix")} ${
+              i + 1
+            }: ${t(lang, "external_import_unsupported_asset_prefix")} ${assetSymbol}`,
+          );
           continue;
         }
 

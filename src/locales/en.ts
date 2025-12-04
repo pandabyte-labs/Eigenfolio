@@ -167,6 +167,7 @@ export const en: Record<string, string> = {
   external_import_source_bitpanda_csv: "Bitpanda (CSV)",
   external_import_open_button: "Import external data",
   external_import_missing_columns_prefix: "Missing columns:",
+  external_import_unsupported_asset_prefix: "Unsupported asset symbol (not imported):",
   external_import_done_button: "Done.",
   external_import_close_button: "Close",
   price_config_section_title: "Price fetching (CoinGecko)",
