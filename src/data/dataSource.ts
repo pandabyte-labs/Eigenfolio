@@ -1072,7 +1072,7 @@ class LocalDataSource implements PortfolioDataSource {
     if (lines.length < 2) {
       return {
         imported: 0,
-        errors: [t(lang, "csv_import_unknown_error")],
+        errors: [t(lang, "csv_import_bitpanda_file_too_short")],
       };
     }
 
@@ -1083,7 +1083,7 @@ class LocalDataSource implements PortfolioDataSource {
     if (headerIndex === -1) {
       return {
         imported: 0,
-        errors: [t(lang, "csv_import_unknown_error")],
+        errors: [t(lang, "csv_import_bitpanda_header_not_found")],
       };
     }
 
@@ -1197,6 +1197,7 @@ class LocalDataSource implements PortfolioDataSource {
         const timestamp = date.toISOString();
 
         const assetSymbol = (record["Asset"] || "").trim().toUpperCase();
+
         const amountAsset = parseFloat(record["Amount Asset"] || "0");
         if (!assetSymbol || !Number.isFinite(amountAsset) || amountAsset === 0) {
           // Rows without a meaningful crypto amount are ignored.
