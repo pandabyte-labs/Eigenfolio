@@ -12,7 +12,7 @@ import type { DataSourceMode } from "./localStore";
 import { DEFAULT_HOLDING_PERIOD_DAYS, DEFAULT_UPCOMING_WINDOW_DAYS } from "../domain/config";
 import { CURRENT_CSV_SCHEMA_VERSION, CSV_SCHEMA_VERSION_COLUMN } from "./csvSchema";
 import { t } from "../i18n";
-import { getTxExplorerUrl } from "../domain/assets";
+import { getAssetMetadata, getTxExplorerUrl } from "../domain/assets";
 import { getActiveProfileConfig, setActiveProfileConfig, getActiveProfileTransactions, setActiveProfileTransactions, getNextActiveProfileTxId } from "../auth/profileStore";
 
 
@@ -632,7 +632,7 @@ class LocalDataSource implements PortfolioDataSource {
       }
 
       const record: Record<string, string> = {};
-      headerCols.forEach((col, idx) => {
+      headerCols.forEach((col: string, idx: number) => {
         let value = parts[idx] ?? "";
         value = value.trim();
         if (value.length >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
@@ -775,7 +775,6 @@ class LocalDataSource implements PortfolioDataSource {
         items.push(tx);
         existingKeys.add(key);
         importedKeys.add(key);
-        importedCount += 1;
       } catch {
         errors.push(
           `${t(lang, "csv_import_error_line_prefix")} ${lineIndex + 1}: ${t(lang, "csv_import_unknown_error")}`,
@@ -923,6 +922,16 @@ class LocalDataSource implements PortfolioDataSource {
         const baseAsset = String(rawBase || "").trim().toUpperCase();
         const quoteAsset = String(rawQuote || "").trim().toUpperCase();
 
+        if (!getAssetMetadata(baseAsset)) {
+          errors.push(
+            `${t(lang, "csv_import_error_line_prefix")} ${rowIndex}: ${t(
+              lang,
+              "external_import_unsupported_asset_prefix",
+            )} ${baseAsset}`,
+          );
+          return;
+        }
+
         const typeUpper = String(rawType || "").toUpperCase();
         let txType = "BUY";
         if (typeUpper.includes("SELL")) {
@@ -975,14 +984,14 @@ class LocalDataSource implements PortfolioDataSource {
         items.push(tx);
         existingKeys.add(key);
         importedKeys.add(key);
-        importedCount += 1;
       } catch (err) {
         console.error("Failed to import Binance row", err);
+        const msg = err instanceof Error ? err.message : String(err);
         errors.push(
           `${t(lang, "csv_import_error_line_prefix")} ${rowIndex}: ${t(
             lang,
             "csv_import_unknown_error",
-          )}`,
+          )} ${msg}`,
         );
       }
     });
@@ -998,13 +1007,87 @@ class LocalDataSource implements PortfolioDataSource {
 
 
 
-  async importBitpandaCsv(lang: Language, file: File): Promise<CsvImportResult> {
+  
+  mergeBitpandaInternalTransfers(transactions: Transaction[]): Transaction[] {
+  const remaining: Transaction[] = [];
+  const grouped = new Map<string, Transaction[]>();
+
+  for (const tx of transactions) {
+    const source = (tx.source || "").toUpperCase();
+    const code = (tx.tx_type || "").toUpperCase();
+    if (source === "BITPANDA" && (code === "TRANSFER_IN" || code === "TRANSFER_OUT")) {
+      const symbol = (tx.asset_symbol || "").toUpperCase();
+      const amount = Math.abs(Number(tx.amount || 0));
+      const key = `${symbol}|${tx.timestamp}|${amount}`;
+      const group = grouped.get(key);
+      if (group) {
+        group.push(tx);
+      } else {
+        grouped.set(key, [tx]);
+      }
+    } else {
+      remaining.push(tx);
+    }
+  }
+
+  const merged: Transaction[] = [];
+
+  for (const group of grouped.values()) {
+    if (group.length !== 2) {
+      for (const tx of group) {
+        remaining.push(tx);
+      }
+      continue;
+    }
+
+    const a = group[0];
+    const b = group[1];
+    const typeA = (a.tx_type || "").toUpperCase();
+    const typeB = (b.tx_type || "").toUpperCase();
+    const isOpposite =
+      (typeA === "TRANSFER_IN" && typeB === "TRANSFER_OUT") ||
+      (typeA === "TRANSFER_OUT" && typeB === "TRANSFER_IN");
+
+    if (!isOpposite) {
+      for (const tx of group) {
+        remaining.push(tx);
+      }
+      continue;
+    }
+
+    const base = typeA === "TRANSFER_OUT" ? a : b;
+    const noteParts: string[] = [];
+    if (a.note) {
+      noteParts.push(a.note);
+    }
+    if (b.note && b.note !== a.note) {
+      noteParts.push(b.note);
+    }
+    const combinedNote =
+      noteParts.length > 0
+        ? `${noteParts.join(" | ")} [internes Bitpanda-Staking-Transferpaar, neutral dargestellt]`
+        : "[internes Bitpanda-Staking-Transferpaar, neutral dargestellt]";
+
+    const mergedTx: Transaction = {
+      ...base,
+      tx_type: "TRANSFER_INTERNAL",
+      amount: 0,
+      note: combinedNote,
+    };
+
+    merged.push(mergedTx);
+  }
+
+  return remaining.concat(merged);
+}
+
+async importBitpandaCsv(lang: Language, file: File): Promise<CsvImportResult> {
     const text = await file.text();
     const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
     if (lines.length < 2) {
       return {
         imported: 0,
-        errors: [t(lang, "csv_import_unknown_error")],
+        errors: [t(lang, "csv_import_bitpanda_file_too_short")],
       };
     }
 
@@ -1015,7 +1098,7 @@ class LocalDataSource implements PortfolioDataSource {
     if (headerIndex === -1) {
       return {
         imported: 0,
-        errors: [t(lang, "csv_import_unknown_error")],
+        errors: [t(lang, "csv_import_bitpanda_header_not_found")],
       };
     }
 
@@ -1048,39 +1131,65 @@ class LocalDataSource implements PortfolioDataSource {
       };
     }
 
-    const items = loadLocalTransactions();
+    const existingItems = loadLocalTransactions();
     const existingKeys = new Set<string>(
-      items.map((tx) => buildTransactionDedupKey(tx)),
+      existingItems.map((tx) => buildTransactionDedupKey(tx)),
     );
     const importedKeys = new Set<string>();
     const errors: string[] = [];
-    let importedCount = 0;
+    const newItems: Transaction[] = [];
+
+    const txIdIndex = headerCols.indexOf("Transaction ID");
+    const multiLegTxIds = new Set<string>();
+    if (txIdIndex !== -1) {
+      const txIdCounts = new Map<string, number>();
+      for (let i = headerIndex + 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line.trim()) continue;
+        const cols = parseCsvLine(line);
+        if (cols.length <= txIdIndex) continue;
+        const rawTxId = cols[txIdIndex] ?? "";
+        const txId = rawTxId.replace(/^"+|"+$/g, "").trim();
+        if (!txId) continue;
+        const prev = txIdCounts.get(txId) ?? 0;
+        const next = prev + 1;
+        txIdCounts.set(txId, next);
+        if (next > 1) {
+          multiLegTxIds.add(txId);
+        }
+      }
+    }
+
+    const multiLegWarnings = new Set<string>();
 
     for (let i = headerIndex + 1; i < lines.length; i++) {
       const line = lines[i];
       if (!line.trim()) continue;
 
       const cols = parseCsvLine(line);
-      if (cols.length < headerCols.length) {
-        // Skip malformed rows but record a warning.
-        errors.push(
-          `${t(lang, "csv_import_error_line_prefix")} ${
-            i + 1
-          }: ${t(lang, "csv_import_unknown_error")}`,
-        );
-        continue;
-      }
 
       const record: Record<string, string> = {};
-      headerCols.forEach((colName, idx) => {
+      headerCols.forEach((colName: string, idx: number) => {
         const raw = cols[idx] ?? "";
         record[colName] = raw.replace(/^"+|"+$/g, "").trim();
       });
 
       try {
+        const txTypeRaw = (record["Transaction Type"] || "").toLowerCase();
+        const isRewardLike =
+          txTypeRaw === "reward" ||
+          txTypeRaw.includes("staking") ||
+          txTypeRaw.includes("airdrop");
+
         const assetClass = (record["Asset class"] || "").trim();
         if (assetClass !== "Cryptocurrency") {
-          // For now we only import cryptocurrency legs; fiat-only movements are ignored.
+          if (isRewardLike) {
+            errors.push(
+              `${t(lang, "csv_import_error_line_prefix")} ${
+                i + 1
+              }: ${t(lang, "csv_import_bitpanda_reward_skipped_non_crypto")}`,
+            );
+          }
           continue;
         }
 
@@ -1089,7 +1198,7 @@ class LocalDataSource implements PortfolioDataSource {
           errors.push(
             `${t(lang, "csv_import_error_line_prefix")} ${
               i + 1
-            }: ${t(lang, "csv_import_unknown_error")}`,
+            }: ${t(lang, "csv_import_bitpanda_missing_timestamp")}`,
           );
           continue;
         }
@@ -1099,16 +1208,40 @@ class LocalDataSource implements PortfolioDataSource {
           errors.push(
             `${t(lang, "csv_import_error_line_prefix")} ${
               i + 1
-            }: ${t(lang, "csv_import_unknown_error")}`,
+            }: ${t(lang, "csv_import_bitpanda_invalid_timestamp")} ${rawTimestamp}`,
           );
           continue;
         }
         const timestamp = date.toISOString();
 
         const assetSymbol = (record["Asset"] || "").trim().toUpperCase();
+
         const amountAsset = parseFloat(record["Amount Asset"] || "0");
         if (!assetSymbol || !Number.isFinite(amountAsset) || amountAsset === 0) {
-          // Rows without a meaningful crypto amount are ignored.
+          if (isRewardLike) {
+            errors.push(
+              `${t(lang, "csv_import_error_line_prefix")} ${
+                i + 1
+              }: ${t(lang, "csv_import_bitpanda_reward_skipped_zero_amount")}`,
+            );
+          }
+          continue;
+        }
+
+        if (!getAssetMetadata(assetSymbol)) {
+          if (isRewardLike) {
+            errors.push(
+              `${t(lang, "csv_import_error_line_prefix")} ${
+                i + 1
+              }: ${t(lang, "csv_import_bitpanda_reward_unsupported_asset")} ${assetSymbol}`,
+            );
+          } else {
+            errors.push(
+              `${t(lang, "csv_import_error_line_prefix")} ${
+                i + 1
+              }: ${t(lang, "external_import_unsupported_asset_prefix")} ${assetSymbol}`,
+            );
+          }
           continue;
         }
 
@@ -1116,19 +1249,28 @@ class LocalDataSource implements PortfolioDataSource {
         const amountFiat = parseFloat(amountFiatRaw || "0");
         const fiatCurrency = (record["Fiat"] || "").trim().toUpperCase() || "EUR";
 
-        const txTypeRaw = (record["Transaction Type"] || "").toLowerCase();
         const inOutRaw = (record["In/Out"] || "").toLowerCase();
 
         let txType = "BUY";
-        if (txTypeRaw.includes("staking")) {
+        if (txTypeRaw === "reward" || txTypeRaw.includes("staking")) {
           txType = "STAKING_REWARD";
-        } else if (txTypeRaw.includes("airdrop") || txTypeRaw.includes("reward")) {
-          txType = "REWARD";
-        } else if (txTypeRaw.includes("deposit") || txTypeRaw.includes("savings")) {
-          txType = "TRANSFER_IN";
-        } else if (txTypeRaw.includes("withdraw")) {
+        } else if (txTypeRaw.includes("airdrop")) {
+          txType = "AIRDROP";
+        } else if (
+          txTypeRaw.includes("deposit") ||
+          txTypeRaw.includes("savings") ||
+          txTypeRaw === "transfer" ||
+          txTypeRaw === "transfer(stake)" ||
+          txTypeRaw === "transfer(unstake)"
+        ) {
+          txType = inOutRaw === "incoming" ? "TRANSFER_IN" : "TRANSFER_OUT";
+        } else if (txTypeRaw.includes("withdraw") || txTypeRaw === "withdrawal") {
           txType = "TRANSFER_OUT";
-        } else if (txTypeRaw.includes("trade")) {
+        } else if (
+          txTypeRaw.includes("trade") ||
+          txTypeRaw === "buy" ||
+          txTypeRaw === "sell"
+        ) {
           txType = inOutRaw === "incoming" ? "BUY" : "SELL";
         } else {
           txType = inOutRaw === "incoming" ? "BUY" : "SELL";
@@ -1179,6 +1321,17 @@ class LocalDataSource implements PortfolioDataSource {
           note += ` [${feeParts.join(", ")}]`;
         }
 
+        const txId = (record["Transaction ID"] || "").trim() || null;
+
+        if (txId && multiLegTxIds.has(txId) && !multiLegWarnings.has(txId)) {
+          errors.push(
+            `${t(lang, "csv_import_error_line_prefix")} ${
+              i + 1
+            }: ${t(lang, "external_import_bitpanda_multi_legs_warning")} ${txId}`,
+          );
+          multiLegWarnings.add(txId);
+        }
+
         const tx: Transaction = {
           id,
           asset_symbol: assetSymbol,
@@ -1189,13 +1342,18 @@ class LocalDataSource implements PortfolioDataSource {
           timestamp,
           source: "BITPANDA",
           note,
-          tx_id: record["Transaction ID"] || null,
+          tx_id: txId,
           fiat_value: fiatValue,
           value_eur: null,
           value_usd: null,
         };
 
-        const key = buildTransactionDedupKey(tx);
+        const txForKey: Transaction = {
+          ...tx,
+          tx_id: null,
+        };
+
+        const key = buildTransactionDedupKey(txForKey);
         if (existingKeys.has(key) || importedKeys.has(key)) {
           errors.push(
             `${t(lang, "csv_import_error_line_prefix")} ${
@@ -1205,29 +1363,30 @@ class LocalDataSource implements PortfolioDataSource {
           continue;
         }
 
-        items.push(tx);
+        newItems.push(tx);
         existingKeys.add(key);
         importedKeys.add(key);
-        importedCount += 1;
       } catch (err) {
         console.error("Failed to import Bitpanda row", err);
+        const msg = err instanceof Error ? err.message : String(err);
         errors.push(
           `${t(lang, "csv_import_error_line_prefix")} ${
             i + 1
-          }: ${t(lang, "csv_import_unknown_error")}`,
+          }: ${t(lang, "csv_import_unknown_error")} ${msg}`,
         );
       }
     }
 
-    saveLocalTransactions(items);
+    const finalNewItems = this.mergeBitpandaInternalTransfers(newItems);
+    const allItems = existingItems.concat(finalNewItems);
+
+    saveLocalTransactions(allItems);
 
     return {
-      imported: importedCount,
+      imported: finalNewItems.length,
       errors,
     };
   }
-
-
 
   async exportPdf(lang: Language, transactions?: Transaction[]): Promise<Blob> {
     const txs = transactions ?? loadLocalTransactions();
@@ -1244,6 +1403,8 @@ class LocalDataSource implements PortfolioDataSource {
           return "TRANSFER\n(IN)";
         case "TRANSFER_OUT":
           return "TRANSFER\n(OUT)";
+        case "TRANSFER_INTERNAL":
+          return "TRANSFER\n(INTERNAL)";
         default:
           return code;
       }

@@ -40,6 +40,8 @@ function formatTxTypeLabel(txType: string | null | undefined): string {
       return "TRANSFER (IN)";
     case "TRANSFER_OUT":
       return "TRANSFER (OUT)";
+    case "TRANSFER_INTERNAL":
+      return "TRANSFER (INTERNAL)";
     default:
       return code || "";
   }
@@ -2080,6 +2082,7 @@ const handleReloadHoldingPrices = async () => {
               <option value="BUY">BUY</option>
               <option value="SELL">SELL</option>
               <option value="TRANSFER_IN">TRANSFER (IN)</option>
+              <option value="TRANSFER_INTERNAL">TRANSFER (INTERNAL)</option>
               <option value="TRANSFER_OUT">TRANSFER (OUT)</option>
               <option value="STAKING_REWARD">STAKING REWARD</option>
               <option value="AIRDROP">AIRDROP</option>
@@ -2547,6 +2550,7 @@ const handleReloadHoldingPrices = async () => {
                   <option value="TRANSFER_OUT">TRANSFER (OUT)</option>
                   <option value="STAKING_REWARD">STAKING REWARD</option>
                   <option value="AIRDROP">AIRDROP</option>
+                  <option value="TRANSFER_INTERNAL">TRANSFER (INTERNAL)</option>
                 </select>
               </div>
               <div className="form-row">
