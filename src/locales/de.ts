@@ -168,6 +168,7 @@ export const de: Record<string, string> = {
   external_import_open_button: "Externe Daten importieren",
   external_import_missing_columns_prefix: "Fehlende Spalten:",
   external_import_unsupported_asset_prefix: "Nicht unterstütztes Asset-Symbol (nicht importiert):",
+  external_import_bitpanda_multi_legs_warning: "Bitpanda-Transaktion mit mehreren Legs (vereinfacht dargestellt, bitte prüfen):",
   external_import_done_button: "Fertig.",
   external_import_close_button: "Schließen",
   price_config_section_title: "Preisabfrage (CoinGecko)",

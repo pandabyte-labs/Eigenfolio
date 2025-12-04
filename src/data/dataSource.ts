@@ -242,6 +242,63 @@ function getNextLocalId(): number {
   try {
     return getNextActiveProfileTxId();
   } catch {
+    const cryptoTransferPairSkip = new Set<number>();
+    const cryptoTransferIndex = new Map<string, { index: number; txType: string }>();
+
+    for (let i = headerIndex + 1; i < lines.length; i++) {
+      if (cryptoTransferPairSkip.has(i)) {
+        continue;
+      }
+
+      const line = lines[i];
+      if (!line.trim()) continue;
+
+      const cols = parseCsvLine(line);
+      if (cols.length < headerCols.length) {
+        continue;
+      }
+
+      const record: Record<string, string> = {};
+      headerCols.forEach((colName, idx) => {
+        const raw = cols[idx] ?? "";
+        record[colName] = raw.replace(/^"+|"+$/g, "").trim();
+      });
+
+      const assetClass = (record["Asset class"] || "").trim();
+      if (assetClass !== "Cryptocurrency") {
+        continue;
+      }
+
+      const txTypeRaw = (record["Transaction Type"] || "").toLowerCase();
+      if (
+        txTypeRaw !== "transfer" &&
+        txTypeRaw !== "transfer(stake)" &&
+        txTypeRaw !== "transfer(unstake)"
+      ) {
+        continue;
+      }
+
+      const timestamp = record["Timestamp"] || "";
+      const assetSymbol = (record["Asset"] || "").trim().toUpperCase();
+      const amountAsset = record["Amount Asset"] || "";
+      const amountFiat = record["Amount Fiat"] || "";
+      const key = `${timestamp}||${assetSymbol}||${amountAsset}||${amountFiat}`;
+
+      const existing = cryptoTransferIndex.get(key);
+      if (
+        existing &&
+        ((existing.txType === "transfer" &&
+          (txTypeRaw === "transfer(stake)" || txTypeRaw === "transfer(unstake)")) ||
+          (txTypeRaw === "transfer" &&
+            (existing.txType === "transfer(stake)" || existing.txType === "transfer(unstake)")))
+      ) {
+        cryptoTransferPairSkip.add(existing.index);
+        cryptoTransferPairSkip.add(i);
+      } else {
+        cryptoTransferIndex.set(key, { index: i, txType: txTypeRaw });
+      }
+    }
+
     const items = loadLocalTransactions();
     const maxId = items.reduce((acc, tx) => (tx.id && tx.id > acc ? tx.id : acc), 0);
     return maxId + 1;
@@ -599,6 +656,29 @@ class LocalDataSource implements PortfolioDataSource {
     const importedKeys = new Set<string>();
     const errors: string[] = [];
     let importedCount = 0;
+
+    const txIdIndex = headerCols.indexOf("Transaction ID");
+    const multiLegTxIds = new Set<string>();
+    if (txIdIndex !== -1) {
+      const txIdCounts = new Map<string, number>();
+      for (let i = headerIndex + 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line.trim()) continue;
+        const cols = parseCsvLine(line);
+        if (cols.length <= txIdIndex) continue;
+        const rawTxId = cols[txIdIndex] ?? "";
+        const txId = rawTxId.replace(/^"+|"+$/g, "").trim();
+        if (!txId) continue;
+        const prev = txIdCounts.get(txId) ?? 0;
+        const next = prev + 1;
+        txIdCounts.set(txId, next);
+        if (next > 1) {
+          multiLegTxIds.add(txId);
+        }
+      }
+    }
+
+    const multiLegWarnings = new Set<string>();
 
     const versionColIndex = headerCols.indexOf(CSV_SCHEMA_VERSION_COLUMN);
     let csvVersion = 1;
@@ -1139,15 +1219,25 @@ class LocalDataSource implements PortfolioDataSource {
         const inOutRaw = (record["In/Out"] || "").toLowerCase();
 
         let txType = "BUY";
-        if (txTypeRaw.includes("staking")) {
+        if (txTypeRaw === "reward" || txTypeRaw.includes("staking")) {
           txType = "STAKING_REWARD";
-        } else if (txTypeRaw.includes("airdrop") || txTypeRaw.includes("reward")) {
-          txType = "REWARD";
-        } else if (txTypeRaw.includes("deposit") || txTypeRaw.includes("savings")) {
-          txType = "TRANSFER_IN";
-        } else if (txTypeRaw.includes("withdraw")) {
+        } else if (txTypeRaw.includes("airdrop")) {
+          txType = "AIRDROP";
+        } else if (
+          txTypeRaw.includes("deposit") ||
+          txTypeRaw.includes("savings") ||
+          txTypeRaw === "transfer" ||
+          txTypeRaw === "transfer(stake)" ||
+          txTypeRaw === "transfer(unstake)"
+        ) {
+          txType = inOutRaw === "incoming" ? "TRANSFER_IN" : "TRANSFER_OUT";
+        } else if (txTypeRaw.includes("withdraw") || txTypeRaw === "withdrawal") {
           txType = "TRANSFER_OUT";
-        } else if (txTypeRaw.includes("trade")) {
+        } else if (
+          txTypeRaw.includes("trade") ||
+          txTypeRaw === "buy" ||
+          txTypeRaw === "sell"
+        ) {
           txType = inOutRaw === "incoming" ? "BUY" : "SELL";
         } else {
           txType = inOutRaw === "incoming" ? "BUY" : "SELL";
@@ -1198,6 +1288,17 @@ class LocalDataSource implements PortfolioDataSource {
           note += ` [${feeParts.join(", ")}]`;
         }
 
+        const txId = (record["Transaction ID"] || "").trim() || null;
+
+        if (txId && multiLegTxIds.has(txId) && !multiLegWarnings.has(txId)) {
+          errors.push(
+            `${t(lang, "csv_import_error_line_prefix")} ${
+              i + 1
+            }: ${t(lang, "external_import_multi_legs_warning")} ${txId}`,
+          );
+          multiLegWarnings.add(txId);
+        }
+
         const tx: Transaction = {
           id,
           asset_symbol: assetSymbol,
@@ -1208,13 +1309,18 @@ class LocalDataSource implements PortfolioDataSource {
           timestamp,
           source: "BITPANDA",
           note,
-          tx_id: record["Transaction ID"] || null,
+          tx_id: txId,
           fiat_value: fiatValue,
           value_eur: null,
           value_usd: null,
         };
 
-        const key = buildTransactionDedupKey(tx);
+        const txForKey: Transaction = {
+          ...tx,
+          tx_id: null,
+        };
+
+        const key = buildTransactionDedupKey(txForKey);
         if (existingKeys.has(key) || importedKeys.has(key)) {
           errors.push(
             `${t(lang, "csv_import_error_line_prefix")} ${
