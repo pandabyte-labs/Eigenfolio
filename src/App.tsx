@@ -2082,10 +2082,10 @@ const handleReloadHoldingPrices = async () => {
               <option value="BUY">BUY</option>
               <option value="SELL">SELL</option>
               <option value="TRANSFER_IN">TRANSFER (IN)</option>
+              <option value="TRANSFER_INTERNAL">TRANSFER (INTERNAL)</option>
               <option value="TRANSFER_OUT">TRANSFER (OUT)</option>
               <option value="STAKING_REWARD">STAKING REWARD</option>
               <option value="AIRDROP">AIRDROP</option>
-              <option value="TRANSFER_INTERNAL">TRANSFER (INTERNAL)</option>
             </select>
           </div>
           <div className="tx-filter-group tx-filter-search form-row">
