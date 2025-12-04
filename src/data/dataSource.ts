@@ -772,7 +772,7 @@ class LocalDataSource implements PortfolioDataSource {
           continue;
         }
 
-        newItems.push(tx);
+        items.push(tx);
         existingKeys.add(key);
         importedKeys.add(key);
       } catch {
@@ -981,7 +981,7 @@ class LocalDataSource implements PortfolioDataSource {
           return;
         }
 
-        newItems.push(tx);
+        items.push(tx);
         existingKeys.add(key);
         importedKeys.add(key);
       } catch (err) {
