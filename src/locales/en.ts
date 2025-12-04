@@ -12,6 +12,10 @@ export const en: Record<string, string> = {
   csv_import_error_line_prefix: "Line",
   csv_import_schema_newer_warning: "The CSV schema version is newer than the version supported by this Traeky build. Import will be performed on a best-effort basis.",
   csv_import_unknown_error: "Unknown error during import:",
+  csv_import_bitpanda_file_too_short: "Bitpanda CSV contains too few rows (possibly only header or empty).",
+  csv_import_bitpanda_header_not_found: "Could not find Bitpanda header row (Transaction ID / Timestamp).",
+  csv_import_malformed_row_prefix: "Malformed CSV row (column count mismatch):",
+
   csv_required: "Required columns: asset_symbol, tx_type, amount, timestamp, price_fiat, fiat_currency.",
   csv_result_errors_title: "Messages and warnings",
   csv_result_prefix: "Imported:",
