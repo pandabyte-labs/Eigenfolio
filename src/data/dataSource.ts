@@ -657,29 +657,6 @@ class LocalDataSource implements PortfolioDataSource {
     const errors: string[] = [];
     let importedCount = 0;
 
-    const txIdIndex = headerCols.indexOf("Transaction ID");
-    const multiLegTxIds = new Set<string>();
-    if (txIdIndex !== -1) {
-      const txIdCounts = new Map<string, number>();
-      for (let i = headerIndex + 1; i < lines.length; i++) {
-        const line = lines[i];
-        if (!line.trim()) continue;
-        const cols = parseCsvLine(line);
-        if (cols.length <= txIdIndex) continue;
-        const rawTxId = cols[txIdIndex] ?? "";
-        const txId = rawTxId.replace(/^"+|"+$/g, "").trim();
-        if (!txId) continue;
-        const prev = txIdCounts.get(txId) ?? 0;
-        const next = prev + 1;
-        txIdCounts.set(txId, next);
-        if (next > 1) {
-          multiLegTxIds.add(txId);
-        }
-      }
-    }
-
-    const multiLegWarnings = new Set<string>();
-
     const versionColIndex = headerCols.indexOf(CSV_SCHEMA_VERSION_COLUMN);
     let csvVersion = 1;
     if (versionColIndex >= 0 && lines.length > 1) {
@@ -1146,6 +1123,29 @@ class LocalDataSource implements PortfolioDataSource {
     const errors: string[] = [];
     let importedCount = 0;
 
+    const txIdIndex = headerCols.indexOf("Transaction ID");
+    const multiLegTxIds = new Set<string>();
+    if (txIdIndex !== -1) {
+      const txIdCounts = new Map<string, number>();
+      for (let i = headerIndex + 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line.trim()) continue;
+        const cols = parseCsvLine(line);
+        if (cols.length <= txIdIndex) continue;
+        const rawTxId = cols[txIdIndex] ?? "";
+        const txId = rawTxId.replace(/^"+|"+$/g, "").trim();
+        if (!txId) continue;
+        const prev = txIdCounts.get(txId) ?? 0;
+        const next = prev + 1;
+        txIdCounts.set(txId, next);
+        if (next > 1) {
+          multiLegTxIds.add(txId);
+        }
+      }
+    }
+
+    const multiLegWarnings = new Set<string>();
+
     for (let i = headerIndex + 1; i < lines.length; i++) {
       const line = lines[i];
       if (!line.trim()) continue;
@@ -1294,7 +1294,7 @@ class LocalDataSource implements PortfolioDataSource {
           errors.push(
             `${t(lang, "csv_import_error_line_prefix")} ${
               i + 1
-            }: ${t(lang, "external_import_multi_legs_warning")} ${txId}`,
+            }: ${t(lang, "external_import_bitpanda_multi_legs_warning")} ${txId}`,
           );
           multiLegWarnings.add(txId);
         }
