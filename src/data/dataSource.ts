@@ -1095,15 +1095,6 @@ class LocalDataSource implements PortfolioDataSource {
       if (!line.trim()) continue;
 
       const cols = parseCsvLine(line);
-      if (cols.length < headerCols.length) {
-        // Skip malformed rows but record a warning.
-        errors.push(
-          `${t(lang, "csv_import_error_line_prefix")} ${
-            i + 1
-          }: ${t(lang, "csv_import_unknown_error")}`,
-        );
-        continue;
-      }
 
       const record: Record<string, string> = {};
       headerCols.forEach((colName: string, idx: number) => {
