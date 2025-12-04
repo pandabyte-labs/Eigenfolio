@@ -15,6 +15,11 @@ export const en: Record<string, string> = {
   csv_import_bitpanda_file_too_short: "Bitpanda CSV contains too few rows (possibly only header or empty).",
   csv_import_bitpanda_header_not_found: "Could not find Bitpanda header row (Transaction ID / Timestamp).",
   csv_import_malformed_row_prefix: "Malformed CSV row (column count mismatch):",
+  csv_import_bitpanda_missing_timestamp: "Bitpanda row without timestamp (not imported).",
+  csv_import_bitpanda_invalid_timestamp: "Bitpanda row with invalid timestamp:",
+  csv_import_bitpanda_reward_skipped_non_crypto: "Bitpanda reward row but asset class is not \"Cryptocurrency\" (not imported).",
+  csv_import_bitpanda_reward_skipped_zero_amount: "Bitpanda reward row with empty or zero crypto amount (not imported).",
+  csv_import_bitpanda_reward_unsupported_asset: "Bitpanda reward row with unsupported asset (not imported):",
 
   csv_required: "Required columns: asset_symbol, tx_type, amount, timestamp, price_fiat, fiat_currency.",
   csv_result_errors_title: "Messages and warnings",

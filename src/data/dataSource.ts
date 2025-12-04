@@ -1169,9 +1169,21 @@ class LocalDataSource implements PortfolioDataSource {
       });
 
       try {
+        const txTypeRaw = (record["Transaction Type"] || "").toLowerCase();
+        const isRewardLike =
+          txTypeRaw === "reward" ||
+          txTypeRaw.includes("staking") ||
+          txTypeRaw.includes("airdrop");
+
         const assetClass = (record["Asset class"] || "").trim();
         if (assetClass !== "Cryptocurrency") {
-          // For now we only import cryptocurrency legs; fiat-only movements are ignored.
+          if (isRewardLike) {
+            errors.push(
+              `${t(lang, "csv_import_error_line_prefix")} ${
+                i + 1
+              }: ${t(lang, "csv_import_bitpanda_reward_skipped_non_crypto")}`,
+            );
+          }
           continue;
         }
 
@@ -1180,7 +1192,7 @@ class LocalDataSource implements PortfolioDataSource {
           errors.push(
             `${t(lang, "csv_import_error_line_prefix")} ${
               i + 1
-            }: ${t(lang, "csv_import_unknown_error")}`,
+            }: ${t(lang, "csv_import_bitpanda_missing_timestamp")}`,
           );
           continue;
         }
@@ -1190,7 +1202,7 @@ class LocalDataSource implements PortfolioDataSource {
           errors.push(
             `${t(lang, "csv_import_error_line_prefix")} ${
               i + 1
-            }: ${t(lang, "csv_import_unknown_error")}`,
+            }: ${t(lang, "csv_import_bitpanda_invalid_timestamp")} ${rawTimestamp}`,
           );
           continue;
         }
@@ -1200,16 +1212,30 @@ class LocalDataSource implements PortfolioDataSource {
 
         const amountAsset = parseFloat(record["Amount Asset"] || "0");
         if (!assetSymbol || !Number.isFinite(amountAsset) || amountAsset === 0) {
-          // Rows without a meaningful crypto amount are ignored.
+          if (isRewardLike) {
+            errors.push(
+              `${t(lang, "csv_import_error_line_prefix")} ${
+                i + 1
+              }: ${t(lang, "csv_import_bitpanda_reward_skipped_zero_amount")}`,
+            );
+          }
           continue;
         }
 
         if (!getAssetMetadata(assetSymbol)) {
-          errors.push(
-            `${t(lang, "csv_import_error_line_prefix")} ${
-              i + 1
-            }: ${t(lang, "external_import_unsupported_asset_prefix")} ${assetSymbol}`,
-          );
+          if (isRewardLike) {
+            errors.push(
+              `${t(lang, "csv_import_error_line_prefix")} ${
+                i + 1
+              }: ${t(lang, "csv_import_bitpanda_reward_unsupported_asset")} ${assetSymbol}`,
+            );
+          } else {
+            errors.push(
+              `${t(lang, "csv_import_error_line_prefix")} ${
+                i + 1
+              }: ${t(lang, "external_import_unsupported_asset_prefix")} ${assetSymbol}`,
+            );
+          }
           continue;
         }
 
@@ -1217,7 +1243,6 @@ class LocalDataSource implements PortfolioDataSource {
         const amountFiat = parseFloat(amountFiatRaw || "0");
         const fiatCurrency = (record["Fiat"] || "").trim().toUpperCase() || "EUR";
 
-        const txTypeRaw = (record["Transaction Type"] || "").toLowerCase();
         const inOutRaw = (record["In/Out"] || "").toLowerCase();
 
         let txType = "BUY";

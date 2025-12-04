@@ -15,6 +15,11 @@ export const de: Record<string, string> = {
   csv_import_bitpanda_file_too_short: "Bitpanda-CSV enthält zu wenige Zeilen (möglicherweise nur Kopfzeile oder leer).",
   csv_import_bitpanda_header_not_found: "Konnte Bitpanda-Kopfzeile (Transaction ID / Timestamp) nicht finden.",
   csv_import_malformed_row_prefix: "Fehlerhafte CSV-Zeile (Spaltenanzahl passt nicht):",
+  csv_import_bitpanda_missing_timestamp: "Bitpanda-Zeile ohne Timestamp (nicht importiert).",
+  csv_import_bitpanda_invalid_timestamp: "Bitpanda-Zeile mit ungültigem Timestamp:",
+  csv_import_bitpanda_reward_skipped_non_crypto: "Bitpanda-Reward-Zeile, aber Asset-Klasse ist nicht \"Cryptocurrency\" (nicht importiert).",
+  csv_import_bitpanda_reward_skipped_zero_amount: "Bitpanda-Reward-Zeile mit leerem oder 0-Crypto-Betrag (nicht importiert).",
+  csv_import_bitpanda_reward_unsupported_asset: "Bitpanda-Reward-Zeile mit nicht unterstütztem Asset (nicht importiert):",
 
   csv_required: "Pflichtspalten: asset_symbol, tx_type, amount, timestamp, price_fiat, fiat_currency.",
   csv_result_errors_title: "Hinweise und Warnungen",
