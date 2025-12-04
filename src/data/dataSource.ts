@@ -772,10 +772,9 @@ class LocalDataSource implements PortfolioDataSource {
           continue;
         }
 
-        items.push(tx);
+        newItems.push(tx);
         existingKeys.add(key);
         importedKeys.add(key);
-        importedCount += 1;
       } catch {
         errors.push(
           `${t(lang, "csv_import_error_line_prefix")} ${lineIndex + 1}: ${t(lang, "csv_import_unknown_error")}`,
@@ -982,10 +981,9 @@ class LocalDataSource implements PortfolioDataSource {
           return;
         }
 
-        items.push(tx);
+        newItems.push(tx);
         existingKeys.add(key);
         importedKeys.add(key);
-        importedCount += 1;
       } catch (err) {
         console.error("Failed to import Binance row", err);
         const msg = err instanceof Error ? err.message : String(err);
@@ -1009,7 +1007,81 @@ class LocalDataSource implements PortfolioDataSource {
 
 
 
-  async importBitpandaCsv(lang: Language, file: File): Promise<CsvImportResult> {
+  
+function mergeBitpandaInternalTransfers(transactions: Transaction[]): Transaction[] {
+  const remaining: Transaction[] = [];
+  const grouped = new Map<string, Transaction[]>();
+
+  for (const tx of transactions) {
+    const source = (tx.source || "").toUpperCase();
+    const code = (tx.tx_type || "").toUpperCase();
+    if (source === "BITPANDA" && (code === "TRANSFER_IN" || code === "TRANSFER_OUT")) {
+      const symbol = (tx.asset_symbol || "").toUpperCase();
+      const amount = Math.abs(Number(tx.amount || 0));
+      const key = `${symbol}|${tx.timestamp}|${amount}`;
+      const group = grouped.get(key);
+      if (group) {
+        group.push(tx);
+      } else {
+        grouped.set(key, [tx]);
+      }
+    } else {
+      remaining.push(tx);
+    }
+  }
+
+  const merged: Transaction[] = [];
+
+  for (const group of grouped.values()) {
+    if (group.length !== 2) {
+      for (const tx of group) {
+        remaining.push(tx);
+      }
+      continue;
+    }
+
+    const a = group[0];
+    const b = group[1];
+    const typeA = (a.tx_type || "").toUpperCase();
+    const typeB = (b.tx_type || "").toUpperCase();
+    const isOpposite =
+      (typeA === "TRANSFER_IN" && typeB === "TRANSFER_OUT") ||
+      (typeA === "TRANSFER_OUT" && typeB === "TRANSFER_IN");
+
+    if (!isOpposite) {
+      for (const tx of group) {
+        remaining.push(tx);
+      }
+      continue;
+    }
+
+    const base = typeA === "TRANSFER_OUT" ? a : b;
+    const noteParts: string[] = [];
+    if (a.note) {
+      noteParts.push(a.note);
+    }
+    if (b.note && b.note !== a.note) {
+      noteParts.push(b.note);
+    }
+    const combinedNote =
+      noteParts.length > 0
+        ? `${noteParts.join(" | ")} [internes Bitpanda-Staking-Transferpaar, neutral dargestellt]`
+        : "[internes Bitpanda-Staking-Transferpaar, neutral dargestellt]";
+
+    const mergedTx: Transaction = {
+      ...base,
+      tx_type: "TRANSFER_INTERNAL",
+      amount: 0,
+      note: combinedNote,
+    };
+
+    merged.push(mergedTx);
+  }
+
+  return remaining.concat(merged);
+}
+
+async importBitpandaCsv(lang: Language, file: File): Promise<CsvImportResult> {
     const text = await file.text();
     const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
     if (lines.length < 2) {
@@ -1059,13 +1131,13 @@ class LocalDataSource implements PortfolioDataSource {
       };
     }
 
-    const items = loadLocalTransactions();
+    const existingItems = loadLocalTransactions();
     const existingKeys = new Set<string>(
-      items.map((tx) => buildTransactionDedupKey(tx)),
+      existingItems.map((tx) => buildTransactionDedupKey(tx)),
     );
     const importedKeys = new Set<string>();
     const errors: string[] = [];
-    let importedCount = 0;
+    const newItems: Transaction[] = [];
 
     const txIdIndex = headerCols.indexOf("Transaction ID");
     const multiLegTxIds = new Set<string>();
@@ -1291,10 +1363,9 @@ class LocalDataSource implements PortfolioDataSource {
           continue;
         }
 
-        items.push(tx);
+        newItems.push(tx);
         existingKeys.add(key);
         importedKeys.add(key);
-        importedCount += 1;
       } catch (err) {
         console.error("Failed to import Bitpanda row", err);
         const msg = err instanceof Error ? err.message : String(err);
@@ -1306,15 +1377,16 @@ class LocalDataSource implements PortfolioDataSource {
       }
     }
 
-    saveLocalTransactions(items);
+    const finalNewItems = mergeBitpandaInternalTransfers(newItems);
+    const allItems = existingItems.concat(finalNewItems);
+
+    saveLocalTransactions(allItems);
 
     return {
-      imported: importedCount,
+      imported: finalNewItems.length,
       errors,
     };
   }
-
-
 
   async exportPdf(lang: Language, transactions?: Transaction[]): Promise<Blob> {
     const txs = transactions ?? loadLocalTransactions();
@@ -1331,6 +1403,8 @@ class LocalDataSource implements PortfolioDataSource {
           return "TRANSFER\n(IN)";
         case "TRANSFER_OUT":
           return "TRANSFER\n(OUT)";
+        case "TRANSFER_INTERNAL":
+          return "TRANSFER\n(INTERNAL)";
         default:
           return code;
       }
