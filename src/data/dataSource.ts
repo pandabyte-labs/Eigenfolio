@@ -1070,6 +1070,7 @@ class LocalDataSource implements PortfolioDataSource {
       tx_type: "TRANSFER_INTERNAL",
       amount: 0,
       note: combinedNote,
+      tx_id: null,
     };
 
     merged.push(mergedTx);
@@ -1350,6 +1351,10 @@ if (feeParts.length > 0) {
 }
 
 const txId = (record["Transaction ID"] || "").trim() || null;
+let storedTxId: string | null = null;
+if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
+  storedTxId = txId;
+}
 
         if (txId && multiLegTxIds.has(txId) && !multiLegWarnings.has(txId)) {
           errors.push(
@@ -1370,7 +1375,7 @@ const txId = (record["Transaction ID"] || "").trim() || null;
           timestamp,
           source: "BITPANDA",
           note,
-          tx_id: txId,
+          tx_id: storedTxId,
           fiat_value: fiatValue,
           value_eur: null,
           value_usd: null,
