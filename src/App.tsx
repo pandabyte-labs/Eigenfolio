@@ -189,27 +189,23 @@ const App: React.FC = () => {
   const filteredTransactions = React.useMemo(
     () => {
       const filtered = transactions.filter((tx) => {
-        // Year filter
         if (txFilterYear) {
           const year = tx.timestamp ? tx.timestamp.slice(0, 4) : "";
           if (year !== txFilterYear) {
             return false;
           }
         }
-        // Asset filter
         if (txFilterAsset) {
           const needle = txFilterAsset.trim().toUpperCase();
           if (needle && !tx.asset_symbol.toUpperCase().includes(needle)) {
             return false;
           }
         }
-        // Type filter
         if (txFilterType) {
           if ((tx.tx_type || "").toUpperCase() !== txFilterType.toUpperCase()) {
             return false;
           }
         }
-        // Free-text search over asset, type, source, note, tx_id
         if (txSearch) {
           const needle = txSearch.trim().toLowerCase();
           if (needle) {
@@ -231,7 +227,17 @@ const App: React.FC = () => {
         return true;
       });
 
-      return filtered.slice().sort((a, b) => {
+      let result = filtered.slice();
+      if (txChainFilterRootId != null) {
+        const chainIds = buildLinkedTransactionChain(transactions, txChainFilterRootId);
+        if (chainIds.size > 0) {
+          result = result.filter((tx) => typeof tx.id === "number" && chainIds.has(tx.id));
+        } else {
+          result = [];
+        }
+      }
+
+      return result.sort((a, b) => {
         const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
         const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
         const safeATime = Number.isFinite(aTime) ? aTime : 0;
@@ -239,7 +245,7 @@ const App: React.FC = () => {
         return safeBTime - safeATime;
       });
     },
-    [transactions, txFilterYear, txFilterAsset, txFilterType, txSearch],
+    [transactions, txFilterYear, txFilterAsset, txFilterType, txSearch, txChainFilterRootId],
   );
 
   const totalTransactions = filteredTransactions.length;
@@ -327,6 +333,8 @@ useEffect(() => {
     source: "",
     note: "",
     tx_id: "",
+    linked_tx_prev_id: "",
+    linked_tx_next_id: "",
   });
 
   const currentLocale = t(lang, "locale_code");
@@ -668,6 +676,8 @@ useEffect(() => {
       source: "",
       note: "",
       tx_id: "",
+      linked_tx_prev_id: "",
+      linked_tx_next_id: "",
     });
     setEditingId(null);
   };
@@ -728,6 +738,47 @@ useEffect(() => {
         }
       }
 
+      let linkedPrevId: number | null = null;
+      let linkedNextId: number | null = null;
+
+      const rawPrev = (form.linked_tx_prev_id ?? "").toString().trim();
+      if (rawPrev) {
+        const parsedPrev = parseInt(rawPrev, 10);
+        if (!Number.isFinite(parsedPrev) || parsedPrev <= 0) {
+          setError(t(lang, "tx_error_link_invalid"));
+          return;
+        }
+        if (editingId != null && parsedPrev === editingId) {
+          setError(t(lang, "tx_error_link_self"));
+          return;
+        }
+        const prevExists = transactions.some((tx) => tx.id === parsedPrev);
+        if (!prevExists) {
+          setError(t(lang, "tx_error_link_not_found"));
+          return;
+        }
+        linkedPrevId = parsedPrev;
+      }
+
+      const rawNext = (form.linked_tx_next_id ?? "").toString().trim();
+      if (rawNext) {
+        const parsedNext = parseInt(rawNext, 10);
+        if (!Number.isFinite(parsedNext) || parsedNext <= 0) {
+          setError(t(lang, "tx_error_link_invalid"));
+          return;
+        }
+        if (editingId != null && parsedNext === editingId) {
+          setError(t(lang, "tx_error_link_self"));
+          return;
+        }
+        const nextExists = transactions.some((tx) => tx.id === parsedNext);
+        if (!nextExists) {
+          setError(t(lang, "tx_error_link_not_found"));
+          return;
+        }
+        linkedNextId = parsedNext;
+      }
+
       const payload = {
         id: editingId,
         asset_symbol: upperSymbol,
@@ -739,6 +790,8 @@ useEffect(() => {
         source: form.source || null,
         note: form.note || null,
         tx_id: form.tx_id || null,
+        linked_tx_prev_id: linkedPrevId,
+        linked_tx_next_id: linkedNextId,
       };
 
       await dataSource.saveTransaction(payload);
@@ -864,6 +917,8 @@ const handleExportCsv = () => {
     "source",
     "note",
     "tx_id",
+    "linked_tx_prev_id",
+    "linked_tx_next_id",
     CSV_SCHEMA_VERSION_COLUMN,
     "holding_period_days",
     "base_currency",
@@ -882,6 +937,8 @@ const handleExportCsv = () => {
     tx.source ?? "",
     tx.note ?? "",
     tx.tx_id ?? "",
+    tx.linked_tx_prev_id != null ? String(tx.linked_tx_prev_id) : "",
+    tx.linked_tx_next_id != null ? String(tx.linked_tx_next_id) : "",
     String(CURRENT_CSV_SCHEMA_VERSION),
     String(config?.holding_period_days ?? DEFAULT_HOLDING_PERIOD_DAYS),
     config?.base_currency ?? "EUR",
@@ -2102,6 +2159,24 @@ const handleReloadHoldingPrices = async () => {
           </div>
         </div>
 
+        {txChainFilterRootId != null && (
+          <div className="tx-chain-filter-info">
+            <span>
+              {t(lang, "tx_chain_filter_label")} {txChainFilterRootId}
+            </span>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                setTxChainFilterRootId(null);
+                setTxPage(1);
+              }}
+            >
+              {t(lang, "tx_chain_filter_clear")}
+            </button>
+          </div>
+        )}
+
         {filteredTransactions.length === 0 ? (
             <p className="muted">{t(lang, "table_tx_empty")}</p>
           ) : (
@@ -2109,6 +2184,8 @@ const handleReloadHoldingPrices = async () => {
             <table className="table table-striped tx-table">
               <thead>
                 <tr>
+                  <th>{t(lang, "table_col_id")}</th>
+                  <th>{t(lang, "table_col_chain")}</th>
                   <th>{t(lang, "table_col_time")}</th>
                   <th>{t(lang, "table_col_asset")}</th>
                   <th>{t(lang, "table_col_type")}</th>
@@ -2129,6 +2206,23 @@ const handleReloadHoldingPrices = async () => {
 
                   return (
                     <tr key={tx.id ?? `tx-${index}`}>
+                      <td>{tx.id}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => {
+                            setTxChainFilterRootId(tx.id);
+                            setTxFilterYear("");
+                            setTxFilterAsset("");
+                            setTxFilterType("");
+                            setTxSearch("");
+                            setTxPage(1);
+                          }}
+                        >
+                          {t(lang, "tx_chain_view")}
+                        </button>
+                      </td>
                       <td>
   {(() => {
     const formatted = dateTimeFormatter.format(new Date(tx.timestamp));
@@ -2299,6 +2393,14 @@ const handleReloadHoldingPrices = async () => {
                               source: tx.source || "",
                               note: tx.note || "",
                               tx_id: tx.tx_id || "",
+                              linked_tx_prev_id:
+                                tx.linked_tx_prev_id != null
+                                  ? String(tx.linked_tx_prev_id)
+                                  : "",
+                              linked_tx_next_id:
+                                tx.linked_tx_next_id != null
+                                  ? String(tx.linked_tx_next_id)
+                                  : "",
                             });
                             setShowTransactionForm(true);
                           }}
@@ -2612,6 +2714,28 @@ const handleReloadHoldingPrices = async () => {
                   value={form.tx_id}
                   onChange={handleChange}
                   placeholder="optional"
+                />
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_linked_prev_tx")}</label>
+                <input
+                  name="linked_tx_prev_id"
+                  value={form.linked_tx_prev_id}
+                  onChange={handleChange}
+                  placeholder={t(lang, "form_linked_prev_tx_placeholder")}
+                  type="number"
+                  min="1"
+                />
+              </div>
+              <div className="form-row">
+                <label>{t(lang, "form_linked_next_tx")}</label>
+                <input
+                  name="linked_tx_next_id"
+                  value={form.linked_tx_next_id}
+                  onChange={handleChange}
+                  placeholder={t(lang, "form_linked_next_tx_placeholder")}
+                  type="number"
+                  min="1"
                 />
               </div>
               <div className="form-row">
