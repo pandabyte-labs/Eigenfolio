@@ -1140,15 +1140,19 @@ class LocalDataSource implements PortfolioDataSource {
       }
 
       let extraNote: string | null = null;
-      if (amountAbs > 0 && symbol) {
-        const baseLabel = isStakeLike ? "internal staking transfer" : "internal transfer";
+      if (isStakeLike) {
+        if (amountAbs > 0 && symbol) {
+          extraNote = `internal staking transfer: ${amountAbs} ${symbol}`;
+        } else {
+          extraNote = "internal staking transfer";
+        }
+      } else if (amountAbs > 0 && symbol) {
+        const baseLabel = "internal transfer";
         if (directionLabel) {
           extraNote = `${baseLabel} ${directionLabel} ${amountAbs} ${symbol}`;
         } else {
           extraNote = `${baseLabel} ${amountAbs} ${symbol}`;
         }
-      } else if (isStakeLike) {
-        extraNote = "internal staking transfer";
       }
 
       let finalNote = combinedNote;
