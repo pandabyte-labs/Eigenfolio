@@ -532,8 +532,17 @@ body {
 
 .tx-chain-links {
   display: inline-flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
   font-size: 0.8rem;
+}
+
+.tx-chain-label {
+  display: inline-block;
+  margin-right: 0.15rem;
+  font-size: 0.7rem;
+  font-weight: 600;
 }
 
 .tx-chain-link {

@@ -2263,45 +2263,54 @@ const handleReloadHoldingPrices = async () => {
                       <td>{tx.id}</td>
                       <td>
                         {(() => {
-                          const ids: number[] = [];
-                          if (typeof tx.linked_tx_prev_id === "number") {
-                            ids.push(tx.linked_tx_prev_id);
-                          }
-                          if (typeof tx.linked_tx_next_id === "number") {
-                            ids.push(tx.linked_tx_next_id);
-                          }
-                          if (ids.length === 0) {
+                          const hasNext = typeof tx.linked_tx_next_id === "number";
+                          const hasPrev = typeof tx.linked_tx_prev_id === "number";
+                          if (!hasNext && !hasPrev) {
                             return "–";
                           }
                           return (
-                            <span className="tx-chain-links">
-                              {ids.map((id, index) => (
+                            <div className="tx-chain-links">
+                              {hasNext && (
                                 <button
-                                  key={id}
                                   type="button"
                                   className="tx-chain-link"
                                   onClick={() => {
-                                    setTxChainFilterRootId(id);
-                                    setTxFilterYear("");
-                                    setTxFilterAsset("");
-                                    setTxFilterType("");
-                                    setTxSearch("");
-                                    setTxPage(1);
+                                    if (typeof tx.linked_tx_next_id === "number") {
+                                      setTxChainFilterRootId(tx.linked_tx_next_id);
+                                      setTxFilterYear("");
+                                      setTxFilterAsset("");
+                                      setTxFilterType("");
+                                      setTxSearch("");
+                                      setTxPage(1);
+                                    }
                                   }}
                                 >
-                                  {id}
+                                  <span className="tx-chain-label">N</span>
+                                  {tx.linked_tx_next_id}
                                 </button>
-                              )).reduce<React.ReactNode[]>((acc, node, index) => {
-                                if (index > 0) {
-                                  acc.push(", ");
-                                }
-                                acc.push(node);
-                                return acc;
-                              }, [])}
-                            </span>
+                              )}
+                              {hasPrev && (
+                                <button
+                                  type="button"
+                                  className="tx-chain-link"
+                                  onClick={() => {
+                                    if (typeof tx.linked_tx_prev_id === "number") {
+                                      setTxChainFilterRootId(tx.linked_tx_prev_id);
+                                      setTxFilterYear("");
+                                      setTxFilterAsset("");
+                                      setTxFilterType("");
+                                      setTxSearch("");
+                                      setTxPage(1);
+                                    }
+                                  }}
+                                >
+                                  <span className="tx-chain-label">P</span>
+                                  {tx.linked_tx_prev_id}
+                                </button>
+                              )}
+                            </div>
                           );
-                        })()}
-                      </td>
+                        })()}                      </td>
                       <td>
   {(() => {
     const formatted = dateTimeFormatter.format(new Date(tx.timestamp));
