@@ -1119,10 +1119,11 @@ class LocalDataSource implements PortfolioDataSource {
       const amountAbs = Math.abs(amountCandidate);
 
       const noteSource = `${a.note || ""} ${b.note || ""}`.toLowerCase();
-      const isStakeLike =
-        noteSource.includes("transfer(stake") ||
-        noteSource.includes("transfer(unstake") ||
-        noteSource.includes("staking");
+      const isStakeIn = noteSource.includes("transfer(stake");
+      const isStakeOut = noteSource.includes("transfer(unstake");
+      const isStakeGeneric =
+        !isStakeIn && !isStakeOut && noteSource.includes("staking");
+      const isStakeLike = isStakeIn || isStakeOut || isStakeGeneric;
 
       const aTimeNote = a.timestamp ? new Date(a.timestamp).getTime() : 0;
       const bTimeNote = b.timestamp ? new Date(b.timestamp).getTime() : 0;
@@ -1141,10 +1142,11 @@ class LocalDataSource implements PortfolioDataSource {
 
       let extraNote: string | null = null;
       if (isStakeLike) {
+        const baseStakeLabel = isStakeOut ? "internal unstaking transfer" : "internal staking transfer";
         if (amountAbs > 0 && symbol) {
-          extraNote = `internal staking transfer: ${amountAbs} ${symbol}`;
+          extraNote = `${baseStakeLabel}: ${amountAbs} ${symbol}`;
         } else {
-          extraNote = "internal staking transfer";
+          extraNote = baseStakeLabel;
         }
       } else if (amountAbs > 0 && symbol) {
         const baseLabel = "internal transfer";
