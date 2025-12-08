@@ -494,19 +494,27 @@ class LocalDataSource implements PortfolioDataSource {
     linked_tx_next_id: number | null;
   }): Promise<void> {
     const items = loadLocalTransactions();
-    const isEdit = payload.id != null;
+    
+const isEdit = payload.id != null;
+
+    let targetTx: Transaction | null = null;
+    let originalPrev: number | null = null;
+    let originalNext: number | null = null;
 
     if (isEdit) {
       const index = items.findIndex((tx) => tx.id === payload.id);
       if (index !== -1) {
+        const existing = items[index];
+        originalPrev = existing.linked_tx_prev_id ?? null;
+        originalNext = existing.linked_tx_next_id ?? null;
         const priceFiat = payload.price_fiat;
         const fiatValue =
           priceFiat != null && Number.isFinite(priceFiat)
             ? priceFiat * payload.amount
             : null;
 
-        items[index] = {
-          ...items[index],
+        const updated: Transaction = {
+          ...existing,
           asset_symbol: payload.asset_symbol,
           tx_type: payload.tx_type,
           amount: payload.amount,
@@ -519,10 +527,10 @@ class LocalDataSource implements PortfolioDataSource {
           linked_tx_prev_id: payload.linked_tx_prev_id,
           linked_tx_next_id: payload.linked_tx_next_id,
           fiat_value: fiatValue,
-          // Leave value_eur/value_usd as-is or null; will be recomputed later.
         };
+        items[index] = updated;
+        targetTx = updated;
       } else {
-        // If not found, treat as new.
         const id = getNextLocalId();
         const priceFiat = payload.price_fiat;
         const fiatValue =
@@ -530,7 +538,7 @@ class LocalDataSource implements PortfolioDataSource {
             ? priceFiat * payload.amount
             : null;
 
-        items.push({
+        const created: Transaction = {
           id,
           asset_symbol: payload.asset_symbol,
           tx_type: payload.tx_type,
@@ -546,7 +554,9 @@ class LocalDataSource implements PortfolioDataSource {
           fiat_value: fiatValue,
           value_eur: null,
           value_usd: null,
-        });
+        };
+        items.push(created);
+        targetTx = created;
       }
     } else {
       const id = getNextLocalId();
@@ -556,7 +566,7 @@ class LocalDataSource implements PortfolioDataSource {
           ? priceFiat * payload.amount
           : null;
 
-      items.push({
+      const created: Transaction = {
         id,
         asset_symbol: payload.asset_symbol,
         tx_type: payload.tx_type,
@@ -572,16 +582,74 @@ class LocalDataSource implements PortfolioDataSource {
         fiat_value: fiatValue,
         value_eur: null,
         value_usd: null,
-      });
+      };
+      items.push(created);
+      targetTx = created;
+    }
+
+    if (targetTx) {
+      const id = targetTx.id;
+      const newPrev = targetTx.linked_tx_prev_id ?? null;
+      const newNext = targetTx.linked_tx_next_id ?? null;
+
+      if (originalPrev != null && originalPrev !== newPrev) {
+        const otherIndex = items.findIndex((tx) => tx.id === originalPrev);
+        if (otherIndex !== -1) {
+          const other = items[otherIndex];
+          if (other.linked_tx_next_id === id) {
+            items[otherIndex] = { ...other, linked_tx_next_id: null };
+          }
+        }
+      }
+
+      if (originalNext != null && originalNext !== newNext) {
+        const otherIndex = items.findIndex((tx) => tx.id === originalNext);
+        if (otherIndex !== -1) {
+          const other = items[otherIndex];
+          if (other.linked_tx_prev_id === id) {
+            items[otherIndex] = { ...other, linked_tx_prev_id: null };
+          }
+        }
+      }
+
+      if (newPrev != null) {
+        const otherIndex = items.findIndex((tx) => tx.id === newPrev);
+        if (otherIndex !== -1) {
+          const other = items[otherIndex];
+          if (other.linked_tx_next_id !== id) {
+            items[otherIndex] = { ...other, linked_tx_next_id: id };
+          }
+        }
+      }
+
+      if (newNext != null) {
+        const otherIndex = items.findIndex((tx) => tx.id === newNext);
+        if (otherIndex !== -1) {
+          const other = items[otherIndex];
+          if (other.linked_tx_prev_id !== id) {
+            items[otherIndex] = { ...other, linked_tx_prev_id: id };
+          }
+        }
+      }
     }
 
     saveLocalTransactions(items);
   }
 
+
   async deleteTransaction(id: number): Promise<void> {
     const items = loadLocalTransactions();
-    const filtered = items.filter((tx) => tx.id !== id);
-    saveLocalTransactions(filtered);
+    const updated = items.map((tx) => {
+      if (tx.linked_tx_prev_id === id || tx.linked_tx_next_id === id) {
+        return {
+          ...tx,
+          linked_tx_prev_id: tx.linked_tx_prev_id === id ? null : tx.linked_tx_prev_id,
+          linked_tx_next_id: tx.linked_tx_next_id === id ? null : tx.linked_tx_next_id,
+        };
+      }
+      return tx;
+    }).filter((tx) => tx.id !== id);
+    saveLocalTransactions(updated);
   }
 
   async importCsv(lang: Language, file: File): Promise<CsvImportResult> {
