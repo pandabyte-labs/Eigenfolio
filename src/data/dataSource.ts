@@ -1097,7 +1097,6 @@ class LocalDataSource implements PortfolioDataSource {
       used.add(i);
       used.add(bestIndex);
 
-      const typeB = (b.tx_type || "").toUpperCase();
       const base = typeA === "TRANSFER_OUT" ? a : b;
 
       const noteParts: string[] = [];
