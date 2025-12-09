@@ -1781,23 +1781,46 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
 
     for (const rowValues of rows) {
       const wrapped: string[][] = rowValues.map((val, idx) => {
-        const text = String(val ?? "");
-        if (!text) {
+        const raw = String(val ?? "");
+        if (!raw) {
           return [""];
         }
-        // For the type column we always respect manual line breaks
-        // so that values like "STAKING REWARD" or "TRANSFER (OUT)"
-        // can be split across two lines in a controlled way.
+        const baseParts = raw.split("\n");
         if (idx === 2) {
-          const parts = text.split("\n");
-          return parts.length > 0 ? parts : [text];
+          const cellWidth = colWidths[idx] - 2;
+          const width = cellWidth > 0 ? cellWidth : 1;
+          const lines: string[] = [];
+          for (const part of baseParts) {
+            const trimmed = part.trim();
+            if (!trimmed) {
+              lines.push("");
+            } else {
+              const splitLines = doc.splitTextToSize(trimmed, width) as string[];
+              for (const l of splitLines) {
+                lines.push(String(l));
+              }
+            }
+          }
+          return lines.length > 0 ? lines : [raw];
         }
         if (!wrapColumns.has(idx)) {
-          return [text];
+          return baseParts.length > 0 ? baseParts : [raw];
         }
-        const cellWidth = colWidths[idx] - 2; // small inner padding
+        const cellWidth = colWidths[idx] - 2;
         const width = cellWidth > 0 ? cellWidth : 1;
-        return doc.splitTextToSize(text, width) as string[];
+        const wrappedParts: string[] = [];
+        for (const part of baseParts) {
+          const segment = part;
+          if (!segment) {
+            wrappedParts.push("");
+          } else {
+            const splitLines = doc.splitTextToSize(segment, width) as string[];
+            for (const l of splitLines) {
+              wrappedParts.push(String(l));
+            }
+          }
+        }
+        return wrappedParts.length > 0 ? wrappedParts : [raw];
       });
 
       const maxLines = wrapped.reduce(
