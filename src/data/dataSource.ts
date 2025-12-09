@@ -1598,9 +1598,10 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
     const headerYStart = marginTop + 16;
     let y = headerYStart;
 
+    const colId = t(lang, "pdf_col_id");
+    const colChain = t(lang, "pdf_col_chain");
     const colTime = t(lang, "pdf_col_time");
     const colAsset = t(lang, "pdf_col_asset");
-    const colChain = t(lang, "pdf_col_chain");
     const colType = t(lang, "pdf_col_type");
     const colAmount = t(lang, "pdf_col_amount");
     const colPrice = t(lang, "pdf_col_price");
@@ -1611,9 +1612,10 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
     const colNote = t(lang, "pdf_col_note");
 
     const headers = [
+      colId,
+      colChain,
       colTime,
       colAsset,
-      colChain,
       colType,
       colAmount,
       colPrice,
@@ -1667,24 +1669,31 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       const valueStr =
         totalValue != null ? formatNumber(totalValue) : "";
       const curStr = baseCurrency;
-      const chainParts: string[] = [];
-      if (typeof tx.linked_tx_prev_id === "number") {
-        chainParts.push(`Prev:${tx.linked_tx_prev_id}`);
-      }
-      if (typeof tx.linked_tx_next_id === "number") {
-        chainParts.push(`Next:${tx.linked_tx_next_id}`);
-      }
-      const chainStr = chainParts.length > 0 ? chainParts.join(" ") : "–";
       const sourceStr = tx.source ?? "";
       const txIdStr = tx.tx_id ?? "";
       const noteStr = tx.note ?? "";
       const txExplorerUrl = getTxExplorerUrl(tx.asset_symbol ?? null, tx.tx_id ?? null);
       txIdLinks.push(txExplorerUrl);
 
+      const idStr = typeof tx.id === "number" ? String(tx.id) : "";
+      const hasNext = typeof tx.linked_tx_next_id === "number";
+      const hasPrev = typeof tx.linked_tx_prev_id === "number";
+      let chainStr = "";
+      if (!hasNext && !hasPrev) {
+        chainStr = "-";
+      } else if (hasPrev && hasNext) {
+        chainStr = `Prev: ${tx.linked_tx_prev_id}; Next: ${tx.linked_tx_next_id}`;
+      } else if (hasPrev) {
+        chainStr = `Prev: ${tx.linked_tx_prev_id}`;
+      } else if (hasNext) {
+        chainStr = `Next: ${tx.linked_tx_next_id}`;
+      }
+
       return [
+        idStr,
+        chainStr,
         timeStr,
         tx.asset_symbol ?? "",
-        chainStr,
         formatTxTypeForPdf(tx.tx_type),
         amountStr,
         priceStr,
@@ -1697,7 +1706,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
     });
 
     const colCount = headers.length;
-    const wrapColumns = new Set<number>([8, 9, 10]); // source, txId, note
+    const wrapColumns = new Set<number>([9, 10, 11]); // source, txId, note
 
     const charWidths: number[] = [];
     for (let col = 0; col < colCount; col++) {
@@ -1712,19 +1721,26 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       // Time and type can be a bit narrower because we already break them into two lines.
       // Amount and value get a bit more room for readability.
       let maxCap: number;
-      if (col === 0) {
+      if (col === 2) {
+        // time
         maxCap = 16;
-      } else if (col === 3) {
+      } else if (col === 4) {
+        // type (can be quite narrow because it is always broken into two lines)
         maxCap = 10;
-      } else if (col === 4 || col === 6) {
+      } else if (col === 5 || col === 7) {
+        // amount, value - give these a bit more space
         maxCap = 26;
-      } else if (col === 5) {
+      } else if (col === 6) {
+        // price
         maxCap = 22;
-      } else if (col === 8) {
-        maxCap = 20;
       } else if (col === 9) {
-        maxCap = 18;
+        // Source: wrap earlier to avoid pushing the note too far
+        maxCap = 20;
       } else if (col === 10) {
+        // TX-ID: wrap earlier so hashes/ids do not stretch the layout
+        maxCap = 18;
+      } else if (col === 11) {
+        // Note: wrap earlier so the column does not dominate the width
         maxCap = 16;
       } else if (wrapColumns.has(col)) {
         maxCap = 20;
@@ -1753,7 +1769,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       }
     }
     const extraGapBetweenCurAndSource = 6;
-    for (let i = 8; i < colX.length; i++) {
+    for (let i = 9; i < colX.length; i++) {
       colX[i] += extraGapBetweenCurAndSource;
     }
 
@@ -1785,53 +1801,30 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
 
     for (const rowValues of rows) {
       const wrapped: string[][] = rowValues.map((val, idx) => {
-        const raw = String(val ?? "");
-        if (!raw) {
+        const text = String(val ?? "");
+        if (!text) {
           return [""];
         }
-        const baseParts = raw.split("\n");
-        if (idx === 3) {
-          const cellWidth = colWidths[idx] - 2;
-          const width = cellWidth > 0 ? cellWidth : 1;
-          const lines: string[] = [];
-          for (const part of baseParts) {
-            const trimmed = part.trim();
-            if (!trimmed) {
-              lines.push("");
-            } else {
-              const splitLines = doc.splitTextToSize(trimmed, width) as string[];
-              for (const l of splitLines) {
-                lines.push(String(l));
-              }
-            }
-          }
-          return lines.length > 0 ? lines : [raw];
+        // For the type column we always respect manual line breaks
+        // so that values like "STAKING REWARD" or "TRANSFER (OUT)"
+        // can be split across two lines in a controlled way.
+        if (idx === 4) {
+          const parts = text.split("\n");
+          return parts.length > 0 ? parts : [text];
         }
         if (!wrapColumns.has(idx)) {
-          return baseParts.length > 0 ? baseParts : [raw];
+          return [text];
         }
-        const cellWidth = colWidths[idx] - 2;
+        const cellWidth = colWidths[idx] - 2; // small inner padding
         const width = cellWidth > 0 ? cellWidth : 1;
-        const wrappedParts: string[] = [];
-        for (const part of baseParts) {
-          const segment = part;
-          if (!segment) {
-            wrappedParts.push("");
-          } else {
-            const splitLines = doc.splitTextToSize(segment, width) as string[];
-            for (const l of splitLines) {
-              wrappedParts.push(String(l));
-            }
-          }
-        }
-        return wrappedParts.length > 0 ? wrappedParts : [raw];
+        return doc.splitTextToSize(text, width) as string[];
       });
 
       const maxLines = wrapped.reduce(
         (max, lines) => (lines.length > max ? lines.length : max),
         1,
       );
-      const rowHeight = maxLines * lineHeight + 3;
+      const rowHeight = maxLines * lineHeight + 2;
 
       // Page break if needed
       if (y + rowHeight > pageHeight - marginBottom) {
@@ -1855,8 +1848,8 @@ wrapped.forEach((lines, idx) => {
   for (const line of lines) {
     doc.text(String(line), cellX, lineY);
 
-    // Add an invisible clickable link for the TX-ID column (column index 9)
-    if (idx === 9) {
+    // Add an invisible clickable link for the TX-ID column (column index 10)
+    if (idx === 10) {
       const link = txIdLinks[rowIndex] || null;
       if (link && line === lines[0]) {
         const cellWidth = colWidths[idx] - 2;
