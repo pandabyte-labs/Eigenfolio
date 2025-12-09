@@ -20,7 +20,6 @@ export const de: Record<string, string> = {
   csv_import_bitpanda_reward_skipped_non_crypto: "Bitpanda-Reward-Zeile, aber Asset-Klasse ist nicht \"Cryptocurrency\" (nicht importiert).",
   csv_import_bitpanda_reward_skipped_zero_amount: "Bitpanda-Reward-Zeile mit leerem oder 0-Crypto-Betrag (nicht importiert).",
   csv_import_bitpanda_reward_unsupported_asset: "Bitpanda-Reward-Zeile mit nicht unterstütztem Asset (nicht importiert):",
-
   csv_required: "Pflichtspalten: asset_symbol, tx_type, amount, timestamp, price_fiat, fiat_currency.",
   csv_result_errors_title: "Hinweise und Warnungen",
   csv_result_prefix: "Importiert:",
@@ -114,6 +113,7 @@ export const de: Record<string, string> = {
   login_status_local: "Lokaler Modus",
   pdf_col_amount: "Menge",
 pdf_col_id: "ID",
+  pdf_col_chain: "Kette",
   pdf_col_asset: "Asset",
   pdf_col_currency: "Währung",
   pdf_col_note: "Notiz",

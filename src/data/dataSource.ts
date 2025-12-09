@@ -1553,9 +1553,9 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
     const tzDate = new Date();
     const dateStr = tzDate.toISOString().slice(0, 10);
 
-    const marginLeft = 14;
-    const marginTop = 20;
-    const marginBottom = 20;
+    const marginLeft = 10;
+    const marginTop = 12;
+    const marginBottom = 12;
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();
     const usableWidth = pageWidth - marginLeft * 2;
@@ -1598,6 +1598,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
     const headerYStart = marginTop + 16;
     let y = headerYStart;
 
+    const colId = t(lang, "pdf_col_id");
     const colTime = t(lang, "pdf_col_time");
     const colAsset = t(lang, "pdf_col_asset");
     const colType = t(lang, "pdf_col_type");
@@ -1606,10 +1607,12 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
     const colValue = t(lang, "pdf_col_value");
     const colCur = t(lang, "pdf_col_currency");
     const colSource = t(lang, "pdf_col_source");
+    const colChain = t(lang, "pdf_col_chain");
     const colTxId = t(lang, "pdf_col_txid");
     const colNote = t(lang, "pdf_col_note");
 
     const headers = [
+      colId,
       colTime,
       colAsset,
       colType,
@@ -1618,6 +1621,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       colValue,
       colCur,
       colSource,
+      colChain,
       colTxId,
       colNote,
     ];
@@ -1655,23 +1659,37 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
         }
       }
 
-      let pricePerUnit: number | null = null;
-      if (totalValue != null && tx.amount != null && Number.isFinite(tx.amount) && tx.amount !== 0) {
-        pricePerUnit = totalValue / tx.amount;
+      let valueStr = "";
+      let curStr = "";
+      if (totalValue != null && Number.isFinite(totalValue)) {
+        valueStr = formatNumber(totalValue);
+        curStr = baseCurrency;
       }
 
       const priceStr =
-        pricePerUnit != null ? formatNumber(pricePerUnit) : "";
-      const valueStr =
-        totalValue != null ? formatNumber(totalValue) : "";
-      const curStr = baseCurrency;
-      const sourceStr = tx.source ?? "";
-      const txIdStr = tx.tx_id ?? "";
-      const noteStr = tx.note ?? "";
+        totalValue != null && Number.isFinite(totalValue) && tx.amount
+          ? formatNumber(totalValue / tx.amount)
+          : "";
+
+      const sourceStr = tx.source || "";
+      const txIdStr = tx.tx_id || "";
       const txExplorerUrl = getTxExplorerUrl(tx.asset_symbol ?? null, tx.tx_id ?? null);
       txIdLinks.push(txExplorerUrl);
 
+      const idStr = tx.id != null ? String(tx.id) : "";
+      const chainParts: string[] = [];
+      if (typeof tx.linked_tx_prev_id === "number") {
+        chainParts.push(`Prev: ${tx.linked_tx_prev_id}`);
+      }
+      if (typeof tx.linked_tx_next_id === "number") {
+        chainParts.push(`Next: ${tx.linked_tx_next_id}`);
+      }
+      const chainStr = chainParts.length > 0 ? chainParts.join(" | ") : "–";
+
+      const noteStr = tx.note || "";
+
       return [
+        idStr,
         timeStr,
         tx.asset_symbol ?? "",
         formatTxTypeForPdf(tx.tx_type),
@@ -1680,13 +1698,14 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
         valueStr,
         curStr,
         sourceStr,
+        chainStr,
         txIdStr,
         noteStr,
       ];
     });
 
     const colCount = headers.length;
-    const wrapColumns = new Set<number>([7, 8, 9]); // source, txId, note
+    const wrapColumns = new Set<number>([8, 9, 10, 11]);
 
     const charWidths: number[] = [];
     for (let col = 0; col < colCount; col++) {
@@ -1702,25 +1721,22 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       // Amount and value get a bit more room for readability.
       let maxCap: number;
       if (col === 0) {
-        // time
+        maxCap = 7;
+      } else if (col === 1) {
         maxCap = 16;
-      } else if (col === 2) {
-        // type (can be quite narrow because it is always broken into two lines)
+      } else if (col === 3) {
         maxCap = 10;
-      } else if (col === 3 || col === 5) {
-        // amount, value - give these a bit more space
+      } else if (col === 4 || col === 6) {
         maxCap = 26;
-      } else if (col === 4) {
-        // price
+      } else if (col === 5) {
         maxCap = 22;
-      } else if (col === 7) {
-        // Source: wrap earlier to avoid pushing the note too far
-        maxCap = 20;
       } else if (col === 8) {
-        // TX-ID: wrap earlier so hashes/ids do not stretch the layout
-        maxCap = 18;
+        maxCap = 20;
       } else if (col === 9) {
-        // Note: wrap earlier so the column does not dominate the width
+        maxCap = 18;
+      } else if (col === 10) {
+        maxCap = 18;
+      } else if (col === 11) {
         maxCap = 16;
       } else if (wrapColumns.has(col)) {
         maxCap = 20;
@@ -1749,7 +1765,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       }
     }
     const extraGapBetweenCurAndSource = 6;
-    for (let i = 7; i < colX.length; i++) {
+    for (let i = 8; i < colX.length; i++) {
       colX[i] += extraGapBetweenCurAndSource;
     }
 
@@ -1788,7 +1804,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
         // For the type column we always respect manual line breaks
         // so that values like "STAKING REWARD" or "TRANSFER (OUT)"
         // can be split across two lines in a controlled way.
-        if (idx === 2) {
+        if (idx === 3) {
           const parts = text.split("\n");
           return parts.length > 0 ? parts : [text];
         }
@@ -1829,7 +1845,7 @@ wrapped.forEach((lines, idx) => {
     doc.text(String(line), cellX, lineY);
 
     // Add an invisible clickable link for the TX-ID column (column index 8)
-    if (idx === 8) {
+    if (idx === 10) {
       const link = txIdLinks[rowIndex] || null;
       if (link && line === lines[0]) {
         const cellWidth = colWidths[idx] - 2;
