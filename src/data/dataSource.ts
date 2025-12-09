@@ -257,6 +257,7 @@ export function computeLocalHoldings(transactions: Transaction[]): HoldingsRespo
     const txType = (tx.tx_type || "").toUpperCase();
     const amount = Number(tx.amount || 0);
     if (!Number.isFinite(amount) || amount === 0) continue;
+    if (txType === "TRANSFER_INTERNAL") continue;
 
     let sign = 1;
     if (txType === "SELL" || txType === "TRANSFER_OUT") {
@@ -1140,16 +1141,12 @@ class LocalDataSource implements PortfolioDataSource {
         directionLabel = "IN";
       }
 
-      let extraNote: string | null = null;
+      let extraNote: string | undefined;
       if (isStakeLike) {
-        const baseStakeLabel = isStakeOut ? "internal unstaking transfer" : "internal staking transfer";
-        if (amountAbs > 0 && symbol) {
-          extraNote = `${baseStakeLabel}: ${amountAbs} ${symbol}`;
-        } else {
-          extraNote = baseStakeLabel;
-        }
+        const baseStakeLabel = isStakeOut ? "Internal unstaking transfer" : "Internal staking transfer";
+        extraNote = baseStakeLabel;
       } else if (amountAbs > 0 && symbol) {
-        const baseLabel = "internal transfer";
+        const baseLabel = "Internal transfer";
         if (directionLabel) {
           extraNote = `${baseLabel} ${directionLabel} ${amountAbs} ${symbol}`;
         } else {
@@ -1158,14 +1155,23 @@ class LocalDataSource implements PortfolioDataSource {
       }
 
       let finalNote = combinedNote;
-      if (extraNote) {
+      if (isStakeLike) {
+        finalNote = extraNote;
+      } else if (extraNote) {
         finalNote = combinedNote ? `${combinedNote} | ${extraNote}` : extraNote;
+      }
+      if (finalNote && finalNote.length > 0) {
+        const firstChar = finalNote[0];
+        const upperFirst = firstChar.toUpperCase();
+        if (upperFirst !== firstChar) {
+          finalNote = upperFirst + finalNote.slice(1);
+        }
       }
 
       const mergedTx: Transaction = {
         ...base,
         tx_type: "TRANSFER_INTERNAL",
-        amount: 0,
+        amount: amountAbs,
         note: finalNote,
         tx_id: null,
       };
@@ -1443,8 +1449,6 @@ if (taxFiat) {
 }
 if (feeParts.length > 0) {
   note += ` [${feeParts.join(", ")}]`;
-} else {
-  note = "";
 }
 
 const txId = (record["Transaction ID"] || "").trim() || null;
