@@ -1613,7 +1613,6 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
 
     const headers = [
       colId,
-      colChain,
       colTime,
       colAsset,
       colType,
@@ -1622,6 +1621,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       colValue,
       colCur,
       colSource,
+      colChain,
       colTxId,
       colNote,
     ];
@@ -1723,23 +1723,21 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       if (col === 0) {
         maxCap = 7;
       } else if (col === 1) {
-        maxCap = 10;
-      } else if (col === 2) {
         maxCap = 16;
       } else if (col === 3) {
         maxCap = 10;
       } else if (col === 4 || col === 6) {
         maxCap = 26;
       } else if (col === 5) {
-        maxCap = 26;
+        maxCap = 22;
       } else if (col === 8) {
-        maxCap = 14;
+        maxCap = 20;
       } else if (col === 9) {
         maxCap = 18;
       } else if (col === 10) {
         maxCap = 18;
       } else if (col === 11) {
-        maxCap = 20;
+        maxCap = 16;
       } else if (wrapColumns.has(col)) {
         maxCap = 20;
       } else {
