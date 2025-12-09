@@ -758,7 +758,7 @@ class LocalDataSource implements PortfolioDataSource {
           fiat_currency: record["fiat_currency"] || "EUR",
           timestamp: record["timestamp"],
           source: record["source"] || null,
-          note: note || undefined,
+          note: record["note"] || null,
           tx_id: record["tx_id"] || null,
           fiat_value: fiatValue,
           value_eur: valueEur,
