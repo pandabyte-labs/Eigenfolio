@@ -1546,7 +1546,6 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
 
     // Use landscape orientation for better column layout
     const doc = new jsPDF({ orientation: "landscape" });
-
     const isDe = lang === "de";
     const title = t(lang, "pdf_title");
     const generatedLabel = t(lang, "pdf_generated_label");
@@ -1599,7 +1598,6 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
     let y = headerYStart;
 
     const colId = t(lang, "pdf_col_id");
-    const colChain = t(lang, "pdf_col_chain");
     const colTime = t(lang, "pdf_col_time");
     const colAsset = t(lang, "pdf_col_asset");
     const colType = t(lang, "pdf_col_type");
@@ -1613,7 +1611,6 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
 
     const headers = [
       colId,
-      colChain,
       colTime,
       colAsset,
       colType,
@@ -1626,10 +1623,9 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       colNote,
     ];
 
-    const typeColIndex = headers.indexOf(colType);
-
     const txIdLinks: (string | null)[] = [];
     const rows: string[][] = txs.map((tx) => {
+      const idStr = String(tx.id);
       const timeStr = tx.timestamp
         ? tx.timestamp.substring(0, 19).replace("T", " ")
         : "";
@@ -1677,20 +1673,8 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       const txExplorerUrl = getTxExplorerUrl(tx.asset_symbol ?? null, tx.tx_id ?? null);
       txIdLinks.push(txExplorerUrl);
 
-      const idStr = typeof tx.id === "number" ? String(tx.id) : "";
-
-      const chainParts: string[] = [];
-      if (typeof tx.linked_tx_next_id === "number") {
-        chainParts.push(`Next: ${tx.linked_tx_next_id}`);
-      }
-      if (typeof tx.linked_tx_prev_id === "number") {
-        chainParts.push(`Prev: ${tx.linked_tx_prev_id}`);
-      }
-      const chainStr = chainParts.length > 0 ? chainParts.join(" ") : "–";
-
       return [
         idStr,
-        chainStr,
         timeStr,
         tx.asset_symbol ?? "",
         formatTxTypeForPdf(tx.tx_type),
@@ -1704,44 +1688,67 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       ];
     });
 
-
     const colCount = headers.length;
+    const wrapColumns = new Set<number>([8, 9, 10]);
 
-    const wrapColumns = new Set<number>();
-    const assetIndex = headers.indexOf(colAsset);
-    const chainIndex = headers.indexOf(colChain);
-    const sourceIndex = headers.indexOf(colSource);
-    const txIdIndex = headers.indexOf(colTxId);
-    const noteIndex = headers.indexOf(colNote);
-    if (assetIndex >= 0) wrapColumns.add(assetIndex);
-    if (chainIndex >= 0) wrapColumns.add(chainIndex);
-    if (sourceIndex >= 0) wrapColumns.add(sourceIndex);
-    if (txIdIndex >= 0) wrapColumns.add(txIdIndex);
-    if (noteIndex >= 0) wrapColumns.add(noteIndex);
+    const charWidths: number[] = [];
+    for (let col = 0; col < colCount; col++) {
+      let maxLen = headers[col].length;
+      for (const row of rows) {
+        const cell = row[col] ?? "";
+        if (cell.length > maxLen) {
+          maxLen = cell.length;
+        }
+      }
+      let maxCap: number;
+      if (col === 0) {
+        maxCap = 8;
+      } else if (col === 1) {
+        maxCap = 16;
+      } else if (col === 3) {
+        maxCap = 10;
+      } else if (col === 4 || col === 6) {
+        maxCap = 26;
+      } else if (col === 5) {
+        maxCap = 22;
+      } else if (col === 8) {
+        maxCap = 20;
+      } else if (col === 9) {
+        maxCap = 18;
+      } else if (col === 10) {
+        maxCap = 16;
+      } else if (wrapColumns.has(col)) {
+        maxCap = 20;
+      } else {
+        maxCap = 18;
+      }
+      const effectiveLen = Math.min(maxLen + 1, maxCap);
+      charWidths[col] = Math.max(6, effectiveLen);
+    }
 
-    const colRelative: number[] = [];
-    if (colCount === 12) {
-      colRelative.push(0.6, 0.9, 1.5, 1.2, 1.3, 1.5, 1.5, 1.5, 0.8, 1.2, 1.6, 2.0);
-    } else if (colCount === 10) {
-      colRelative.push(1.3, 1.4, 1.0, 1.5, 1.5, 1.5, 0.8, 1.2, 1.8, 2.0);
-    } else {
-      for (let i = 0; i < colCount; i++) {
-        colRelative.push(1);
+    const baseCharWidth = 2.0;
+    const rawWidths = charWidths.map((len) => Math.max(12, len * baseCharWidth));
+    const totalRawWidth = rawWidths.reduce((sum, w) => sum + w, 0);
+    const scale = totalRawWidth > usableWidth ? usableWidth / totalRawWidth : 1;
+    const colWidths = rawWidths.map((w) => w * scale);
+
+    const colX: number[] = [];
+    {
+      const colGap = 2;
+      let acc = marginLeft;
+      for (const w of colWidths) {
+        colX.push(acc);
+        acc += w + colGap;
       }
     }
-
-    const totalRelative = colRelative.reduce((sum, w) => sum + w, 0);
-    const colWidths: number[] = [];
-    const colX: number[] = [];
-    let currentX = marginLeft;
-
-    for (let i = 0; i < colCount; i++) {
-      const weight = colRelative[i] ?? 1;
-      const width = totalRelative > 0 ? (usableWidth * weight) / totalRelative : usableWidth / colCount;
-      colWidths.push(width);
-      colX.push(currentX);
-      currentX += width;
+    const extraGapBetweenCurAndSource = 6;
+    for (let i = 8; i < colX.length; i++) {
+      colX[i] += extraGapBetweenCurAndSource;
     }
+
+    const tableFontSize = 9;
+    const tableFontFamily = "times";
+    const lineHeight = 4.5;
 
     doc.setFontSize(tableFontSize);
     doc.setFont(tableFontFamily, "bold");
@@ -1764,6 +1771,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       doc.setFont(tableFontFamily, "normal");
       y += lineHeight + 1;
     };
+
     for (const rowValues of rows) {
       const wrapped: string[][] = rowValues.map((val, idx) => {
         const text = String(val ?? "");
@@ -1773,7 +1781,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
         // For the type column we always respect manual line breaks
         // so that values like "STAKING REWARD" or "TRANSFER (OUT)"
         // can be split across two lines in a controlled way.
-        if (idx === typeColIndex) {
+        if (idx === 2) {
           const parts = text.split("\n");
           return parts.length > 0 ? parts : [text];
         }
@@ -1813,8 +1821,8 @@ wrapped.forEach((lines, idx) => {
   for (const line of lines) {
     doc.text(String(line), cellX, lineY);
 
-    // Add an invisible clickable link for the TX-ID column
-    if (txIdIndex >= 0 && idx === txIdIndex) {
+    // Add an invisible clickable link for the TX-ID column (column index 8)
+    if (idx === 8) {
       const link = txIdLinks[rowIndex] || null;
       if (link && line === lines[0]) {
         const cellWidth = colWidths[idx] - 2;
