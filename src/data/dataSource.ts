@@ -1546,6 +1546,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
 
     // Use landscape orientation for better column layout
     const doc = new jsPDF({ orientation: "landscape" });
+
     const isDe = lang === "de";
     const title = t(lang, "pdf_title");
     const generatedLabel = t(lang, "pdf_generated_label");
@@ -1606,6 +1607,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
     const colValue = t(lang, "pdf_col_value");
     const colCur = t(lang, "pdf_col_currency");
     const colSource = t(lang, "pdf_col_source");
+    const colChain = t(lang, "pdf_col_chain");
     const colTxId = t(lang, "pdf_col_txid");
     const colNote = t(lang, "pdf_col_note");
 
@@ -1619,13 +1621,13 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       colValue,
       colCur,
       colSource,
+      colChain,
       colTxId,
       colNote,
     ];
 
     const txIdLinks: (string | null)[] = [];
     const rows: string[][] = txs.map((tx) => {
-      const idStr = String(tx.id);
       const timeStr = tx.timestamp
         ? tx.timestamp.substring(0, 19).replace("T", " ")
         : "";
@@ -1657,21 +1659,34 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
         }
       }
 
-      let pricePerUnit: number | null = null;
-      if (totalValue != null && tx.amount != null && Number.isFinite(tx.amount) && tx.amount !== 0) {
-        pricePerUnit = totalValue / tx.amount;
+      let valueStr = "";
+      let curStr = "";
+      if (totalValue != null && Number.isFinite(totalValue)) {
+        valueStr = formatNumber(totalValue);
+        curStr = baseCurrency;
       }
 
       const priceStr =
-        pricePerUnit != null ? formatNumber(pricePerUnit) : "";
-      const valueStr =
-        totalValue != null ? formatNumber(totalValue) : "";
-      const curStr = baseCurrency;
-      const sourceStr = tx.source ?? "";
-      const txIdStr = tx.tx_id ?? "";
-      const noteStr = tx.note ?? "";
+        totalValue != null && Number.isFinite(totalValue) && tx.amount
+          ? formatNumber(totalValue / tx.amount)
+          : "";
+
+      const sourceStr = tx.source || "";
+      const txIdStr = tx.tx_id || "";
       const txExplorerUrl = getTxExplorerUrl(tx.asset_symbol ?? null, tx.tx_id ?? null);
       txIdLinks.push(txExplorerUrl);
+
+      const idStr = tx.id != null ? String(tx.id) : "";
+      const chainParts: string[] = [];
+      if (typeof tx.linked_tx_prev_id === "number") {
+        chainParts.push(`Prev: ${tx.linked_tx_prev_id}`);
+      }
+      if (typeof tx.linked_tx_next_id === "number") {
+        chainParts.push(`Next: ${tx.linked_tx_next_id}`);
+      }
+      const chainStr = chainParts.length > 0 ? chainParts.join(" | ") : "–";
+
+      const noteStr = tx.note || "";
 
       return [
         idStr,
@@ -1683,13 +1698,14 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
         valueStr,
         curStr,
         sourceStr,
+        chainStr,
         txIdStr,
         noteStr,
       ];
     });
 
     const colCount = headers.length;
-    const wrapColumns = new Set<number>([8, 9, 10]);
+    const wrapColumns = new Set<number>([8, 9, 10, 11]);
 
     const charWidths: number[] = [];
     for (let col = 0; col < colCount; col++) {
@@ -1700,6 +1716,9 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
           maxLen = cell.length;
         }
       }
+      // Control how "wide" each column can become in characters.
+      // Time and type can be a bit narrower because we already break them into two lines.
+      // Amount and value get a bit more room for readability.
       let maxCap: number;
       if (col === 0) {
         maxCap = 8;
@@ -1716,13 +1735,17 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       } else if (col === 9) {
         maxCap = 18;
       } else if (col === 10) {
+        maxCap = 18;
+      } else if (col === 11) {
         maxCap = 16;
       } else if (wrapColumns.has(col)) {
         maxCap = 20;
       } else {
         maxCap = 18;
       }
+
       const effectiveLen = Math.min(maxLen + 1, maxCap);
+      // Do not let columns become too narrow so that headers remain readable.
       charWidths[col] = Math.max(6, effectiveLen);
     }
 
@@ -1781,7 +1804,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
         // For the type column we always respect manual line breaks
         // so that values like "STAKING REWARD" or "TRANSFER (OUT)"
         // can be split across two lines in a controlled way.
-        if (idx === 2) {
+        if (idx === 3) {
           const parts = text.split("\n");
           return parts.length > 0 ? parts : [text];
         }
@@ -1822,7 +1845,7 @@ wrapped.forEach((lines, idx) => {
     doc.text(String(line), cellX, lineY);
 
     // Add an invisible clickable link for the TX-ID column (column index 8)
-    if (idx === 8) {
+    if (idx === 10) {
       const link = txIdLinks[rowIndex] || null;
       if (link && line === lines[0]) {
         const cellWidth = colWidths[idx] - 2;
