@@ -463,12 +463,12 @@ export async function createAdditionalProfile(
   return meta;
 }
 
-export function resetActiveProfileData(): void {
+export async function resetActiveProfileData(): Promise<void> {
   if (!activeProfile) {
     throw new Error("No active profile session");
   }
   activeProfile.data = createEmptyProfileData();
-  void persistActiveProfile();
+  await persistActiveProfile();
 }
 
 export async function verifyActiveProfilePin(pin: string): Promise<boolean> {

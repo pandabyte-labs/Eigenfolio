@@ -257,6 +257,7 @@ export function computeLocalHoldings(transactions: Transaction[]): HoldingsRespo
     const txType = (tx.tx_type || "").toUpperCase();
     const amount = Number(tx.amount || 0);
     if (!Number.isFinite(amount) || amount === 0) continue;
+    if (txType === "TRANSFER_INTERNAL") continue;
 
     let sign = 1;
     if (txType === "SELL" || txType === "TRANSFER_OUT") {
@@ -1008,6 +1009,7 @@ class LocalDataSource implements PortfolioDataSource {
 
 
   
+  
   mergeBitpandaInternalTransfers(transactions: Transaction[]): Transaction[] {
   const remaining: Transaction[] = [];
   const grouped = new Map<string, Transaction[]>();
@@ -1018,7 +1020,7 @@ class LocalDataSource implements PortfolioDataSource {
     if (source === "BITPANDA" && (code === "TRANSFER_IN" || code === "TRANSFER_OUT")) {
       const symbol = (tx.asset_symbol || "").toUpperCase();
       const amount = Math.abs(Number(tx.amount || 0));
-      const key = `${symbol}|${tx.timestamp}|${amount}`;
+      const key = `${symbol}|${amount}`;
       const group = grouped.get(key);
       if (group) {
         group.push(tx);
@@ -1031,53 +1033,155 @@ class LocalDataSource implements PortfolioDataSource {
   }
 
   const merged: Transaction[] = [];
+  const maxDeltaMs = 60 * 1000;
 
   for (const group of grouped.values()) {
-    if (group.length !== 2) {
-      for (const tx of group) {
-        remaining.push(tx);
+    const pool = group.slice().sort((a, b) => {
+      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      const safeATime = Number.isFinite(aTime) ? aTime : 0;
+      const safeBTime = Number.isFinite(bTime) ? bTime : 0;
+      return safeATime - safeBTime;
+    });
+
+    const used = new Set<number>();
+
+    for (let i = 0; i < pool.length; i++) {
+      if (used.has(i)) {
+        continue;
       }
-      continue;
-    }
 
-    const a = group[0];
-    const b = group[1];
-    const typeA = (a.tx_type || "").toUpperCase();
-    const typeB = (b.tx_type || "").toUpperCase();
-    const isOpposite =
-      (typeA === "TRANSFER_IN" && typeB === "TRANSFER_OUT") ||
-      (typeA === "TRANSFER_OUT" && typeB === "TRANSFER_IN");
-
-    if (!isOpposite) {
-      for (const tx of group) {
-        remaining.push(tx);
+      const a = pool[i];
+      const typeA = (a.tx_type || "").toUpperCase();
+      if (typeA !== "TRANSFER_IN" && typeA !== "TRANSFER_OUT") {
+        remaining.push(a);
+        used.add(i);
+        continue;
       }
-      continue;
-    }
 
-    const base = typeA === "TRANSFER_OUT" ? a : b;
-    const noteParts: string[] = [];
-    if (a.note) {
-      noteParts.push(a.note);
-    }
-    if (b.note && b.note !== a.note) {
-      noteParts.push(b.note);
-    }
-    const combinedNote = noteParts.length > 0 ? noteParts.join(" | ") : undefined;
+      let bestIndex = -1;
+      let bestDelta = Number.POSITIVE_INFINITY;
 
-    const mergedTx: Transaction = {
-      ...base,
-      tx_type: "TRANSFER_INTERNAL",
-      amount: 0,
-      note: combinedNote,
-    };
+      for (let j = i + 1; j < pool.length; j++) {
+        if (used.has(j)) {
+          continue;
+        }
+        const b = pool[j];
+        const typeB = (b.tx_type || "").toUpperCase();
+        const isOpposite =
+          (typeA === "TRANSFER_IN" && typeB === "TRANSFER_OUT") ||
+          (typeA === "TRANSFER_OUT" && typeB === "TRANSFER_IN");
 
-    merged.push(mergedTx);
+        if (!isOpposite) {
+          continue;
+        }
+
+        const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+        const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+        const safeATime = Number.isFinite(aTime) ? aTime : 0;
+        const safeBTime = Number.isFinite(bTime) ? bTime : 0;
+        const delta = Math.abs(safeBTime - safeATime);
+
+        if (delta <= maxDeltaMs && delta < bestDelta) {
+          bestDelta = delta;
+          bestIndex = j;
+        }
+      }
+
+      if (bestIndex === -1) {
+        remaining.push(a);
+        used.add(i);
+        continue;
+      }
+
+      const b = pool[bestIndex];
+      used.add(i);
+      used.add(bestIndex);
+
+      const base = typeA === "TRANSFER_OUT" ? a : b;
+
+      const noteParts: string[] = [];
+      if (a.note) {
+        noteParts.push(a.note);
+      }
+      if (b.note && b.note !== a.note) {
+        noteParts.push(b.note);
+      }
+      const combinedNote = noteParts.length > 0 ? noteParts.join(" | ") : undefined;
+
+      const symbol = (base.asset_symbol || "").toUpperCase();
+      const rawAmountA =
+        typeof a.amount === "number" ? a.amount : Number(a.amount ?? 0);
+      const rawAmountB =
+        typeof b.amount === "number" ? b.amount : Number(b.amount ?? 0);
+      const amountCandidate =
+        (Number.isFinite(rawAmountA) && rawAmountA !== 0 ? rawAmountA : 0) ||
+        (Number.isFinite(rawAmountB) ? rawAmountB : 0);
+      const amountAbs = Math.abs(amountCandidate);
+
+      const noteSource = `${a.note || ""} ${b.note || ""}`.toLowerCase();
+      const isStakeIn = noteSource.includes("transfer(stake");
+      const isStakeOut = noteSource.includes("transfer(unstake");
+      const isStakeGeneric =
+        !isStakeIn && !isStakeOut && noteSource.includes("staking");
+      const isStakeLike = isStakeIn || isStakeOut || isStakeGeneric;
+
+      const aTimeNote = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const bTimeNote = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      const safeATimeNote = Number.isFinite(aTimeNote) ? aTimeNote : 0;
+      const safeBTimeNote = Number.isFinite(bTimeNote) ? bTimeNote : 0;
+      const earlierIsA = safeATimeNote <= safeBTimeNote;
+      const earlierTx = earlierIsA ? a : b;
+      const earlierType = (earlierTx.tx_type || "").toUpperCase();
+
+      let directionLabel: string | null = null;
+      if (earlierType === "TRANSFER_OUT") {
+        directionLabel = "OUT";
+      } else if (earlierType === "TRANSFER_IN") {
+        directionLabel = "IN";
+      }
+
+      let extraNote: string | undefined;
+      if (isStakeLike) {
+        const baseStakeLabel = isStakeOut ? "Internal unstaking transfer" : "Internal staking transfer";
+        extraNote = baseStakeLabel;
+      } else if (amountAbs > 0 && symbol) {
+        const baseLabel = "Internal transfer";
+        if (directionLabel) {
+          extraNote = `${baseLabel} ${directionLabel} ${amountAbs} ${symbol}`;
+        } else {
+          extraNote = `${baseLabel} ${amountAbs} ${symbol}`;
+        }
+      }
+
+      let finalNote = combinedNote;
+      if (isStakeLike) {
+        finalNote = extraNote;
+      } else if (extraNote) {
+        finalNote = combinedNote ? `${combinedNote} | ${extraNote}` : extraNote;
+      }
+      if (finalNote && finalNote.length > 0) {
+        const firstChar = finalNote[0];
+        const upperFirst = firstChar.toUpperCase();
+        if (upperFirst !== firstChar) {
+          finalNote = upperFirst + finalNote.slice(1);
+        }
+      }
+
+      const mergedTx: Transaction = {
+        ...base,
+        tx_type: "TRANSFER_INTERNAL",
+        amount: amountAbs,
+        note: finalNote,
+        tx_id: null,
+      };
+
+      merged.push(mergedTx);
+    }
   }
 
   return remaining.concat(merged);
 }
-
 async importBitpandaCsv(lang: Language, file: File): Promise<CsvImportResult> {
     const text = await file.text();
     const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
@@ -1345,11 +1449,13 @@ if (taxFiat) {
 }
 if (feeParts.length > 0) {
   note += ` [${feeParts.join(", ")}]`;
-} else {
-  note = "";
 }
 
 const txId = (record["Transaction ID"] || "").trim() || null;
+let storedTxId: string | null = null;
+if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
+  storedTxId = txId;
+}
 
         if (txId && multiLegTxIds.has(txId) && !multiLegWarnings.has(txId)) {
           errors.push(
@@ -1370,7 +1476,7 @@ const txId = (record["Transaction ID"] || "").trim() || null;
           timestamp,
           source: "BITPANDA",
           note,
-          tx_id: txId,
+          tx_id: storedTxId,
           fiat_value: fiatValue,
           value_eur: null,
           value_usd: null,

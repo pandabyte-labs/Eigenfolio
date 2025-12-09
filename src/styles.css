@@ -520,71 +520,127 @@ body {
   color: var(--text-muted);
 }
 /* Transaction history table column sizing */
+
+
+.tx-chain-filter-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0.75rem 0;
+  font-size: 0.8rem;
+}
+
+.tx-chain-links {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  font-size: 0.8rem;
+}
+
+.tx-chain-label {
+  display: inline-block;
+  margin-right: 0.15rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.tx-chain-link {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.tx-chain-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .tx-table th,
 .tx-table td {
-  /* Allow wrapping inside the transaction table where needed */
   white-space: normal;
 }
 
 .tx-table th:nth-child(1),
 .tx-table td:nth-child(1) {
-  min-width: 7rem; /* Time */
+  min-width: 3.5rem;
+  max-width: 4.5rem;
+  text-align: right;
 }
 
 .tx-table th:nth-child(2),
 .tx-table td:nth-child(2) {
-  min-width: 6rem; /* Asset, slightly narrower */
+  min-width: 5rem;
+}
+
+.tx-table th:nth-child(3),
+.tx-table td:nth-child(3) {
+  min-width: 7rem;
 }
 
 .tx-table th:nth-child(4),
 .tx-table td:nth-child(4) {
-  min-width: 7rem; /* Amount */
-  text-align: right;
+  min-width: 6rem;
 }
 
 .tx-table th:nth-child(5),
 .tx-table td:nth-child(5) {
-  min-width: 7.5rem; /* Price */
-  text-align: right;
+  min-width: 5rem;
 }
 
 .tx-table th:nth-child(6),
 .tx-table td:nth-child(6) {
-  min-width: 8rem; /* Value */
+  min-width: 7rem;
   text-align: right;
 }
 
 .tx-table th:nth-child(7),
 .tx-table td:nth-child(7) {
-  max-width: 10rem; /* Tx ID, wrap instead of ellipsis */
-  word-break: break-word;
-  overflow-wrap: anywhere;
+  min-width: 7.5rem;
+  text-align: right;
 }
 
 .tx-table th:nth-child(8),
 .tx-table td:nth-child(8) {
-  max-width: 8rem; /* Source, wrap earlier */
-  word-break: break-word;
-  overflow-wrap: anywhere;
+  min-width: 8rem;
+  text-align: right;
 }
 
 .tx-table th:nth-child(9),
 .tx-table td:nth-child(9) {
-  max-width: 7rem; /* Holding badge */
+  max-width: 10rem;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .tx-table th:nth-child(10),
 .tx-table td:nth-child(10) {
-  max-width: 11rem; /* Note, narrower and wrapping earlier */
+  max-width: 8rem;
   word-break: break-word;
   overflow-wrap: anywhere;
 }
 
 .tx-table th:nth-child(11),
 .tx-table td:nth-child(11) {
-  white-space: nowrap; /* Action buttons stay on one line */
+  max-width: 7rem;
 }
 
+.tx-table th:nth-child(12),
+.tx-table td:nth-child(12) {
+  max-width: 11rem;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.tx-table th:nth-child(13),
+.tx-table td:nth-child(13) {
+  white-space: nowrap;
+}
 
 .table-striped tbody tr:nth-child(even) {
   background: rgba(15, 23, 42, 0.75);

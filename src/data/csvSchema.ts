@@ -1,4 +1,4 @@
-export const CURRENT_CSV_SCHEMA_VERSION = 3;
+export const CURRENT_CSV_SCHEMA_VERSION = 4;
 export const CSV_SCHEMA_VERSION_COLUMN = "csv_schema_version";
 
 export function parseCsvSchemaVersion(value: string | undefined | null): number {

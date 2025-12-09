@@ -11,6 +11,8 @@ export type Transaction = {
   source?: string | null;
   note?: string | null;
   tx_id?: string | null;
+  linked_tx_prev_id?: number | null;
+  linked_tx_next_id?: number | null;
   fiat_value?: number | null;
   value_eur?: number | null;
   value_usd?: number | null;
