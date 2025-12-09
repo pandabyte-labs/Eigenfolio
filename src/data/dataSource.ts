@@ -1143,10 +1143,10 @@ class LocalDataSource implements PortfolioDataSource {
 
       let extraNote: string | null = null;
       if (isStakeLike) {
-        const baseStakeLabel = isStakeOut ? "internal unstaking transfer" : "internal staking transfer";
+        const baseStakeLabel = isStakeOut ? "Internal unstaking transfer" : "Internal staking transfer";
         extraNote = baseStakeLabel;
       } else if (amountAbs > 0 && symbol) {
-        const baseLabel = "internal transfer";
+        const baseLabel = "Internal transfer";
         if (directionLabel) {
           extraNote = `${baseLabel} ${directionLabel} ${amountAbs} ${symbol}`;
         } else {
@@ -1159,6 +1159,13 @@ class LocalDataSource implements PortfolioDataSource {
         finalNote = extraNote;
       } else if (extraNote) {
         finalNote = combinedNote ? `${combinedNote} | ${extraNote}` : extraNote;
+      }
+      if (finalNote && finalNote.length > 0) {
+        const firstChar = finalNote[0];
+        const upperFirst = firstChar.toUpperCase();
+        if (upperFirst !== firstChar) {
+          finalNote = upperFirst + finalNote.slice(1);
+        }
       }
 
       const mergedTx: Transaction = {
