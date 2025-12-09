@@ -1721,7 +1721,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       // Amount and value get a bit more room for readability.
       let maxCap: number;
       if (col === 0) {
-        maxCap = 8;
+        maxCap = 7;
       } else if (col === 1) {
         maxCap = 16;
       } else if (col === 3) {
