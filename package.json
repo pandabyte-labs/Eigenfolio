@@ -11,8 +11,8 @@
     "ci-build": "vite build"
   },
   "dependencies": {
-    "react": "^19.2.1",
-    "react-dom": "^19.2.1",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
     "jspdf": "^3.0.4"
   },
   "devDependencies": {
