@@ -143,6 +143,8 @@ export interface PortfolioDataSource {
     source: string | null;
     note: string | null;
     tx_id: string | null;
+    linked_tx_prev_id?: number | null;
+    linked_tx_next_id?: number | null;
   }): Promise<void>;
 
   deleteTransaction(id: number): Promise<void>;
@@ -209,6 +211,158 @@ function saveLocalTransactions(items: Transaction[]): void {
 
 export function overwriteLocalTransactions(items: Transaction[]): void {
   saveLocalTransactions(items);
+}
+
+
+function sanitizeLinkedTxId(candidate: unknown): number | null {
+  if (typeof candidate !== "number") {
+    return null;
+  }
+  if (!Number.isFinite(candidate)) {
+    return null;
+  }
+  const id = Math.trunc(candidate);
+  return id > 0 ? id : null;
+}
+
+function buildTxIndex(items: Transaction[]): Map<number, Transaction> {
+  const map = new Map<number, Transaction>();
+  for (const tx of items) {
+    if (typeof tx.id === "number" && Number.isFinite(tx.id)) {
+      map.set(tx.id, tx);
+    }
+  }
+  return map;
+}
+
+/**
+ * Ensures that linked_tx_prev_id / linked_tx_next_id are always consistent in both directions.
+ *
+ * Rules:
+ * - Dangling references to missing tx ids are removed.
+ * - If A.prev=B then B.next=A (and any displaced previous B.next is detached).
+ * - If A.next=C then C.prev=A (and any displaced previous C.prev is detached).
+ * - If B.next=A but A.prev is not B, then B.next is detached (same for prev).
+ */
+function normalizeLinkedTransactionGraph(items: Transaction[]): boolean {
+  const map = buildTxIndex(items);
+  let changed = false;
+
+  const detachPrev = (txId: number, expectedPrev: number) => {
+    const tx = map.get(txId);
+    if (!tx) return;
+    if (tx.linked_tx_prev_id === expectedPrev) {
+      tx.linked_tx_prev_id = null;
+      changed = true;
+    }
+  };
+
+  const detachNext = (txId: number, expectedNext: number) => {
+    const tx = map.get(txId);
+    if (!tx) return;
+    if (tx.linked_tx_next_id === expectedNext) {
+      tx.linked_tx_next_id = null;
+      changed = true;
+    }
+  };
+
+  // Sanitize references + remove dangling pointers.
+  for (const tx of items) {
+		const prev = sanitizeLinkedTxId(tx.linked_tx_prev_id);
+		const next = sanitizeLinkedTxId(tx.linked_tx_next_id);
+
+    if (tx.linked_tx_prev_id !== prev) {
+      tx.linked_tx_prev_id = prev;
+      changed = true;
+    }
+    if (tx.linked_tx_next_id !== next) {
+      tx.linked_tx_next_id = next;
+      changed = true;
+    }
+
+    if (prev != null && !map.has(prev)) {
+      tx.linked_tx_prev_id = null;
+      changed = true;
+    }
+    if (next != null && !map.has(next)) {
+      tx.linked_tx_next_id = null;
+      changed = true;
+    }
+  }
+
+  // Enforce forward links to be reflected backward.
+  for (const tx of items) {
+    const txId = typeof tx.id === "number" ? tx.id : null;
+    if (!txId) continue;
+
+    const prevId = tx.linked_tx_prev_id ?? null;
+    if (prevId != null) {
+      const prev = map.get(prevId);
+      if (prev) {
+        const displacedNext = sanitizeLinkedTxId(prev.linked_tx_next_id);
+        if (displacedNext != null && displacedNext !== txId) {
+          detachPrev(displacedNext, prevId);
+        }
+        if (prev.linked_tx_next_id !== txId) {
+          prev.linked_tx_next_id = txId;
+          changed = true;
+        }
+      }
+    }
+
+    const nextId = tx.linked_tx_next_id ?? null;
+    if (nextId != null) {
+      const next = map.get(nextId);
+      if (next) {
+        const displacedPrev = sanitizeLinkedTxId(next.linked_tx_prev_id);
+        if (displacedPrev != null && displacedPrev !== txId) {
+          detachNext(displacedPrev, nextId);
+        }
+        if (next.linked_tx_prev_id !== txId) {
+          next.linked_tx_prev_id = txId;
+          changed = true;
+        }
+      }
+    }
+  }
+
+  // Detach one-way pointers (reverse direction).
+  for (const tx of items) {
+    const txId = typeof tx.id === "number" ? tx.id : null;
+    if (!txId) continue;
+
+    const prevId = sanitizeLinkedTxId(tx.linked_tx_prev_id);
+    if (prevId != null) {
+      const prev = map.get(prevId);
+      if (!prev || prev.linked_tx_next_id !== txId) {
+        tx.linked_tx_prev_id = null;
+        changed = true;
+      }
+    }
+
+    const nextId = sanitizeLinkedTxId(tx.linked_tx_next_id);
+    if (nextId != null) {
+      const next = map.get(nextId);
+      if (!next || next.linked_tx_prev_id !== txId) {
+        tx.linked_tx_next_id = null;
+        changed = true;
+      }
+    }
+  }
+
+  // Guard: prevent identical prev/next.
+  for (const tx of items) {
+    if (
+      tx.linked_tx_prev_id != null &&
+      tx.linked_tx_prev_id === tx.linked_tx_next_id
+    ) {
+      tx.linked_tx_prev_id = null;
+      tx.linked_tx_next_id = null;
+      changed = true;
+    }
+  }
+
+  return changed;
 }
 
 
@@ -443,7 +597,13 @@ class LocalDataSource implements PortfolioDataSource {
   async loadInitialData() {
     const config: AppConfig = loadLocalConfig();
     setCoingeckoApiKey(config.coingecko_api_key ?? null);
-    const rawTxs = loadLocalTransactions();
+    const rawTxs = loadLocalTransactions().map((tx) => ({ ...tx }));
+
+    // Heal any one-way / dangling chain links from older stored data.
+    const didNormalizeLinks = normalizeLinkedTransactionGraph(rawTxs);
+    if (didNormalizeLinks) {
+      saveLocalTransactions(rawTxs);
+    }
 
     const baseCurrency: "EUR" | "USD" =
       config.base_currency === "USD" ? "USD" : "EUR";
@@ -478,102 +638,151 @@ class LocalDataSource implements PortfolioDataSource {
     };
   }
 
-  async saveTransaction(payload: {
-    id?: number | null;
-    asset_symbol: string;
-    tx_type: string;
-    amount: number;
-    price_fiat: number | null;
-    fiat_currency: string;
-    timestamp: string;
-    source: string | null;
-    note: string | null;
-    tx_id: string | null;
-  }): Promise<void> {
-    const items = loadLocalTransactions();
-    const isEdit = payload.id != null;
 
-    if (isEdit) {
-      const index = items.findIndex((tx) => tx.id === payload.id);
-      if (index !== -1) {
-        const priceFiat = payload.price_fiat;
-        const fiatValue =
-          priceFiat != null && Number.isFinite(priceFiat)
-            ? priceFiat * payload.amount
-            : null;
+async saveTransaction(payload: {
+  id?: number | null;
+  asset_symbol: string;
+  tx_type: string;
+  amount: number;
+  price_fiat: number | null;
+  fiat_currency: string;
+  timestamp: string;
+  source: string | null;
+  note: string | null;
+  tx_id: string | null;
+  linked_tx_prev_id?: number | null;
+  linked_tx_next_id?: number | null;
+}): Promise<void> {
+  // Clone transactions so we can mutate safely.
+  const items = loadLocalTransactions().map((tx) => ({ ...tx }));
+  const isEdit = payload.id != null;
+  const txId: number = isEdit ? (payload.id as number) : getNextLocalId();
 
-        items[index] = {
-          ...items[index],
-          asset_symbol: payload.asset_symbol,
-          tx_type: payload.tx_type,
-          amount: payload.amount,
-          price_fiat: priceFiat,
-          fiat_currency: payload.fiat_currency,
-          timestamp: payload.timestamp,
-          source: payload.source,
-          note: payload.note,
-          tx_id: payload.tx_id,
-          fiat_value: fiatValue,
-          // Leave value_eur/value_usd as-is or null; will be recomputed later.
-        };
-      } else {
-        // If not found, treat as new.
-        const id = getNextLocalId();
-        const priceFiat = payload.price_fiat;
-        const fiatValue =
-          priceFiat != null && Number.isFinite(priceFiat)
-            ? priceFiat * payload.amount
-            : null;
+  const newPrevId = sanitizeLinkedTxId(payload.linked_tx_prev_id);
+  const newNextId = sanitizeLinkedTxId(payload.linked_tx_next_id);
 
-        items.push({
-          id,
-          asset_symbol: payload.asset_symbol,
-          tx_type: payload.tx_type,
-          amount: payload.amount,
-          price_fiat: priceFiat,
-          fiat_currency: payload.fiat_currency,
-          timestamp: payload.timestamp,
-          source: payload.source,
-          note: payload.note,
-          tx_id: payload.tx_id,
-          fiat_value: fiatValue,
-          value_eur: null,
-          value_usd: null,
-        });
-      }
-    } else {
-      const id = getNextLocalId();
-      const priceFiat = payload.price_fiat;
-      const fiatValue =
-        priceFiat != null && Number.isFinite(priceFiat)
-          ? priceFiat * payload.amount
-          : null;
+  const index = items.findIndex((tx) => tx.id === txId);
+  const existing = index !== -1 ? items[index] : null;
 
-      items.push({
-        id,
-        asset_symbol: payload.asset_symbol,
-        tx_type: payload.tx_type,
-        amount: payload.amount,
-        price_fiat: priceFiat,
-        fiat_currency: payload.fiat_currency,
-        timestamp: payload.timestamp,
-        source: payload.source,
-        note: payload.note,
-        tx_id: payload.tx_id,
-        fiat_value: fiatValue,
-        value_eur: null,
-        value_usd: null,
-      });
+  const oldPrevId = existing ? sanitizeLinkedTxId(existing.linked_tx_prev_id) : null;
+  const oldNextId = existing ? sanitizeLinkedTxId(existing.linked_tx_next_id) : null;
+
+  const priceFiat = payload.price_fiat;
+  const fiatValue =
+    priceFiat != null && Number.isFinite(priceFiat)
+      ? priceFiat * payload.amount
+      : null;
+
+  // Detach previous neighbors if the edited tx changed its links.
+  const mapBefore = buildTxIndex(items);
+
+  if (oldPrevId != null && oldPrevId !== newPrevId) {
+    const prevTx = mapBefore.get(oldPrevId);
+    if (prevTx && prevTx.linked_tx_next_id === txId) {
+      prevTx.linked_tx_next_id = null;
     }
-
-    saveLocalTransactions(items);
   }
 
-  async deleteTransaction(id: number): Promise<void> {
-    const items = loadLocalTransactions();
-    const filtered = items.filter((tx) => tx.id !== id);
-    saveLocalTransactions(filtered);
+  if (oldNextId != null && oldNextId !== newNextId) {
+    const nextTx = mapBefore.get(oldNextId);
+    if (nextTx && nextTx.linked_tx_prev_id === txId) {
+      nextTx.linked_tx_prev_id = null;
+    }
   }
+
+  const merged: Transaction = {
+    ...(existing ?? ({} as Transaction)),
+    id: txId,
+    asset_symbol: payload.asset_symbol,
+    tx_type: payload.tx_type,
+    amount: payload.amount,
+    price_fiat: priceFiat,
+    fiat_currency: payload.fiat_currency,
+    timestamp: payload.timestamp,
+    source: payload.source,
+    note: payload.note,
+    tx_id: payload.tx_id,
+    fiat_value: fiatValue,
+    // Keep base-fiat values as-is (or null). They can be recomputed by the price enrichment step.
+    value_eur: existing?.value_eur ?? null,
+    value_usd: existing?.value_usd ?? null,
+    linked_tx_prev_id: newPrevId,
+    linked_tx_next_id: newNextId,
+  };
+
+  if (index !== -1) {
+    items[index] = merged;
+  } else {
+    items.push(merged);
+  }
+
+  // Apply the forward links to neighbors, resolving 1:1 conflicts deterministically.
+  const map = buildTxIndex(items);
+
+  if (newPrevId != null) {
+    const prevTx = map.get(newPrevId);
+    if (prevTx) {
+      const displacedNext = sanitizeLinkedTxId(prevTx.linked_tx_next_id);
+      if (displacedNext != null && displacedNext !== txId) {
+        const displaced = map.get(displacedNext);
+        if (displaced && displaced.linked_tx_prev_id === newPrevId) {
+          displaced.linked_tx_prev_id = null;
+        }
+      }
+      prevTx.linked_tx_next_id = txId;
+    }
+  }
+
+  if (newNextId != null) {
+    const nextTx = map.get(newNextId);
+    if (nextTx) {
+      const displacedPrev = sanitizeLinkedTxId(nextTx.linked_tx_prev_id);
+      if (displacedPrev != null && displacedPrev !== txId) {
+        const displaced = map.get(displacedPrev);
+        if (displaced && displaced.linked_tx_next_id === newNextId) {
+          displaced.linked_tx_next_id = null;
+        }
+      }
+      nextTx.linked_tx_prev_id = txId;
+    }
+  }
+
+  // Final safety net: normalize the entire link graph and remove any one-way / dangling pointers.
+  normalizeLinkedTransactionGraph(items);
+
+  saveLocalTransactions(items);
+}
+
+
+async deleteTransaction(id: number): Promise<void> {
+  const items = loadLocalTransactions().map((tx) => ({ ...tx }));
+  const map = buildTxIndex(items);
+
+  const target = map.get(id);
+  const prevId = target ? sanitizeLinkedTxId(target.linked_tx_prev_id) : null;
+  const nextId = target ? sanitizeLinkedTxId(target.linked_tx_next_id) : null;
+
+  const filtered = items.filter((tx) => tx.id !== id);
+  const mapAfter = buildTxIndex(filtered);
+
+  // Detach / bridge neighbors (prev <-> next) if they still point to the deleted tx.
+  if (prevId != null) {
+    const prevTx = mapAfter.get(prevId);
+    if (prevTx && prevTx.linked_tx_next_id === id) {
+      prevTx.linked_tx_next_id = nextId;
+    }
+  }
+
+  if (nextId != null) {
+    const nextTx = mapAfter.get(nextId);
+    if (nextTx && nextTx.linked_tx_prev_id === id) {
+      nextTx.linked_tx_prev_id = prevId;
+    }
+  }
+
+  normalizeLinkedTransactionGraph(filtered);
+  saveLocalTransactions(filtered);
+}
 
   async importCsv(lang: Language, file: File): Promise<CsvImportResult> {
     const text = await file.text();
@@ -749,6 +958,17 @@ class LocalDataSource implements PortfolioDataSource {
           }
         }
 
+
+        const linkedPrev = sanitizeLinkedTxId(
+          record["linked_tx_prev_id"]
+            ? parseInt(String(record["linked_tx_prev_id"]).trim(), 10)
+            : null,
+        );
+        const linkedNext = sanitizeLinkedTxId(
+          record["linked_tx_next_id"]
+            ? parseInt(String(record["linked_tx_next_id"]).trim(), 10)
+            : null,
+        );
         const tx: Transaction = {
           id,
           asset_symbol: (record["asset_symbol"] || "").toUpperCase(),
@@ -763,6 +983,8 @@ class LocalDataSource implements PortfolioDataSource {
           fiat_value: fiatValue,
           value_eur: valueEur,
           value_usd: valueUsd,
+          linked_tx_prev_id: linkedPrev,
+          linked_tx_next_id: linkedNext,
         };
 
         const key = buildTransactionDedupKey(tx);
@@ -776,6 +998,7 @@ class LocalDataSource implements PortfolioDataSource {
         items.push(tx);
         existingKeys.add(key);
         importedKeys.add(key);
+        importedCount += 1;
       } catch {
         errors.push(
           `${t(lang, "csv_import_error_line_prefix")} ${lineIndex + 1}: ${t(lang, "csv_import_unknown_error")}`,
@@ -783,6 +1006,7 @@ class LocalDataSource implements PortfolioDataSource {
       }
     }
 
+    normalizeLinkedTransactionGraph(items);
     saveLocalTransactions(items);
 
     return {
@@ -985,6 +1209,7 @@ class LocalDataSource implements PortfolioDataSource {
         items.push(tx);
         existingKeys.add(key);
         importedKeys.add(key);
+        importedCount += 1;
       } catch (err) {
         console.error("Failed to import Binance row", err);
         const msg = err instanceof Error ? err.message : String(err);
@@ -997,6 +1222,7 @@ class LocalDataSource implements PortfolioDataSource {
       }
     });
 
+    normalizeLinkedTransactionGraph(items);
     saveLocalTransactions(items);
 
     return {
@@ -1613,6 +1839,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
 
     const headers = [
       colId,
+      colChain,
       colTime,
       colAsset,
       colType,
@@ -1621,7 +1848,6 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       colValue,
       colCur,
       colSource,
-      colChain,
       colTxId,
       colNote,
     ];
@@ -1677,19 +1903,19 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       txIdLinks.push(txExplorerUrl);
 
       const idStr = tx.id != null ? String(tx.id) : "";
-      const chainParts: string[] = [];
-      if (typeof tx.linked_tx_prev_id === "number") {
-        chainParts.push(`Prev: ${tx.linked_tx_prev_id}`);
-      }
-      if (typeof tx.linked_tx_next_id === "number") {
-        chainParts.push(`Next: ${tx.linked_tx_next_id}`);
-      }
-      const chainStr = chainParts.length > 0 ? chainParts.join(" | ") : "–";
+      // Display the transaction chain as two lines to save horizontal space.
+      // Prev is always shown under Next for readability and a predictable row height.
+      const nextStr =
+        typeof tx.linked_tx_next_id === "number" ? String(tx.linked_tx_next_id) : "–";
+      const prevStr =
+        typeof tx.linked_tx_prev_id === "number" ? String(tx.linked_tx_prev_id) : "–";
+      const chainStr = `Next: ${nextStr}\nPrev: ${prevStr}`;
 
       const noteStr = tx.note || "";
 
       return [
         idStr,
+        chainStr,
         timeStr,
         tx.asset_symbol ?? "",
         formatTxTypeForPdf(tx.tx_type),
@@ -1698,14 +1924,13 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
         valueStr,
         curStr,
         sourceStr,
-        chainStr,
         txIdStr,
         noteStr,
       ];
     });
 
     const colCount = headers.length;
-    const wrapColumns = new Set<number>([8, 9, 10, 11]);
+    const wrapColumns = new Set<number>([1, 9, 10, 11]);
 
     const charWidths: number[] = [];
     for (let col = 0; col < colCount; col++) {
@@ -1721,52 +1946,87 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       // Amount and value get a bit more room for readability.
       let maxCap: number;
       if (col === 0) {
-        maxCap = 7;
+        maxCap = 7; // ID
       } else if (col === 1) {
-        maxCap = 16;
+        maxCap = 11; // Chain
+      } else if (col === 2) {
+        maxCap = 14; // Time
       } else if (col === 3) {
-        maxCap = 10;
-      } else if (col === 4 || col === 6) {
-        maxCap = 26;
-      } else if (col === 5) {
-        maxCap = 22;
+        maxCap = 12; // Asset
+      } else if (col === 4) {
+        maxCap = 10; // Type
+      } else if (col === 5 || col === 7) {
+        maxCap = 26; // Amount / Value
+      } else if (col === 6) {
+        maxCap = 22; // Price
       } else if (col === 8) {
-        maxCap = 20;
+        maxCap = 9; // Currency
       } else if (col === 9) {
-        maxCap = 18;
+        maxCap = 18; // Source
       } else if (col === 10) {
-        maxCap = 18;
+        maxCap = 18; // TX-ID
       } else if (col === 11) {
-        maxCap = 16;
+        maxCap = 16; // Note
       } else if (wrapColumns.has(col)) {
-        maxCap = 20;
+        maxCap = 18;
       } else {
         maxCap = 18;
       }
 
-      const effectiveLen = Math.min(maxLen + 1, maxCap);
+      // Character padding that acts like a little intra-cell breathing room. For the first
+      // columns (ID) and the short categorical column (Currency) we keep this at 0 to avoid
+      // wasting horizontal space.
+      const paddingChars = col === 0 || col === 8 ? 0 : 1;
+      const effectiveLen = Math.min(maxLen + paddingChars, maxCap);
       // Do not let columns become too narrow so that headers remain readable.
       charWidths[col] = Math.max(6, effectiveLen);
     }
 
     const baseCharWidth = 2.0;
-    const rawWidths = charWidths.map((len) => Math.max(12, len * baseCharWidth));
+    // Column width estimation is intentionally heuristic. We slightly compress very short
+    // categorical columns to gain room for text-heavy columns on the right.
+    const rawWidths = charWidths.map((len, idx) => {
+      // The Chain column is formatted as exactly two lines (Next/Prev), so we can keep
+      // it a bit narrower than other text columns to pull "Time" closer.
+      const factor =
+        idx === 0
+          ? 1.6
+          : idx === 1
+            ? 1.55
+            : idx === 8
+              ? 1.9
+              : baseCharWidth;
+      const min = idx === 0 ? 10 : idx === 1 ? 14 : 12;
+      return Math.max(min, len * factor);
+    });
     const totalRawWidth = rawWidths.reduce((sum, w) => sum + w, 0);
-    const scale = totalRawWidth > usableWidth ? usableWidth / totalRawWidth : 1;
+
+    // Column spacing (in pt/mm units used by jsPDF). We intentionally keep these small because
+    // the table is already dense. Gaps are part of the total layout width and must be considered
+    // when we scale columns to the page.
+    const defaultGap = 2;
+    const colGaps: number[] = new Array(Math.max(0, colCount - 1)).fill(defaultGap);
+    // Fine tuning:
+    // - ID ↔ Chain: slightly tighter
+    // - Chain ↔ Time: tighter
+    // - Currency ↔ Source: a bit more breathing room
+    if (colGaps.length >= 1) colGaps[0] = 1.3;
+    if (colGaps.length >= 2) colGaps[1] = 1.2;
+    if (colGaps.length >= 9) colGaps[8] = 2.2;
+
+    const totalGaps = colGaps.reduce((sum, g) => sum + g, 0);
+    const usableWidthForCols = Math.max(10, usableWidth - totalGaps);
+
+    const scale = totalRawWidth > usableWidthForCols ? usableWidthForCols / totalRawWidth : 1;
     const colWidths = rawWidths.map((w) => w * scale);
 
     const colX: number[] = [];
     {
-      const colGap = 2;
       let acc = marginLeft;
-      for (const w of colWidths) {
+      for (let i = 0; i < colWidths.length; i++) {
         colX.push(acc);
-        acc += w + colGap;
+        acc += colWidths[i] + (i < colGaps.length ? colGaps[i] : 0);
       }
-    }
-    const extraGapBetweenCurAndSource = 6;
-    for (let i = 8; i < colX.length; i++) {
-      colX[i] += extraGapBetweenCurAndSource;
     }
 
     const tableFontSize = 9;
@@ -1782,7 +2042,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
     doc.setFont(tableFontFamily, "normal");
     y += lineHeight + 1;
 
-    let rowIndex = 0;
+    let globalRowIndex = 0;
 
     const drawHeader = () => {
       doc.setFontSize(tableFontSize);
@@ -1801,10 +2061,10 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
         if (!text) {
           return [""];
         }
-        // For the type column we always respect manual line breaks
-        // so that values like "STAKING REWARD" or "TRANSFER (OUT)"
-        // can be split across two lines in a controlled way.
-        if (idx === 3) {
+        // For the Chain and Type columns we always respect manual line breaks.
+        // This keeps the table layout deterministic and avoids unintended wrapping.
+        // (Chain is formatted as exactly two lines: Next/Prev.)
+        if (idx === 1 || idx === 4) {
           const parts = text.split("\n");
           return parts.length > 0 ? parts : [text];
         }
@@ -1824,48 +2084,46 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
 
       // Page break if needed
       if (y + rowHeight > pageHeight - marginBottom) {
-      doc.addPage("a4", "landscape");
+        doc.addPage("a4", "landscape");
         doc.setFontSize(tableFontSize);
         drawHeader();
-        rowIndex = 0;
       }
 
       // Zebra striping: even rows get a light grey background
-      if (rowIndex % 2 === 1) {
+      if (globalRowIndex % 2 === 1) {
         doc.setFillColor(240, 240, 240);
         doc.rect(marginLeft, y - lineHeight + 1, usableWidth, rowHeight, "F");
       }
 
       // Write cell texts
-wrapped.forEach((lines, idx) => {
-  const cellX = colX[idx] + 1;
-  let lineY = y;
+      wrapped.forEach((lines, idx) => {
+        const cellX = colX[idx] + 1;
+        let lineY = y;
 
-  for (const line of lines) {
-    doc.text(String(line), cellX, lineY);
+        for (const line of lines) {
+          doc.text(String(line), cellX, lineY);
 
-    // Add an invisible clickable link for the TX-ID column (column index 8)
-    if (idx === 10) {
-      const link = txIdLinks[rowIndex] || null;
-      if (link && line === lines[0]) {
-        const cellWidth = colWidths[idx] - 2;
-        const width = cellWidth > 0 ? cellWidth : 1;
-        const height = rowHeight - 2;
-        try {
-          doc.link(cellX, y, width, height, { url: link });
-        } catch {
-          // ignore link errors to avoid breaking PDF generation
+          // Add an invisible clickable link for the TX-ID column (column index 10)
+          if (idx === 10) {
+            const link = txIdLinks[globalRowIndex] || null;
+            if (link && line === lines[0]) {
+              const cellWidth = colWidths[idx] - 2;
+              const width = cellWidth > 0 ? cellWidth : 1;
+              const height = rowHeight - 2;
+              try {
+                doc.link(cellX, y, width, height, { url: link });
+              } catch {
+                // ignore link errors to avoid breaking PDF generation
+              }
+            }
+          }
+
+          lineY += lineHeight;
         }
-      }
-    }
-
-    lineY += lineHeight;
-  }
-});
-;
+      });
 
       y += rowHeight;
-      rowIndex += 1;
+      globalRowIndex += 1;
     }
 
     const disclaimer = t(lang, "pdf_disclaimer");

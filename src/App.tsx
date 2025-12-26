@@ -1018,57 +1018,38 @@ const handleExportCsv = () => {
   window.URL.revokeObjectURL(url);
 };
 
-  const handleSaveHoldingConfig = () => {
-  if (!config) {
-    return;
-  }
-
-  const raw = holdingPeriodInput.trim();
-  if (!raw.length) {
-    return;
-  }
-
-  const parsed = parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    alert(t(lang, "holding_config_invalid"));
-    return;
-  }
-
-  const nextConfig: AppConfig = {
-    holding_period_days: parsed,
-    upcoming_holding_window_days:
-      config.upcoming_holding_window_days ?? DEFAULT_UPCOMING_WINDOW_DAYS,
-    base_currency: config.base_currency ?? "EUR",
-    price_fetch_enabled: config.price_fetch_enabled !== false,
-    coingecko_api_key: config.coingecko_api_key ?? null,
-  };
-
-  setConfig(nextConfig);
-
-  if (auth.mode === "local-only") {
-    saveLocalAppConfig(nextConfig);
-    const expiringNext = computeLocalExpiring(transactions, nextConfig);
-    setExpiring(expiringNext);
-  }
-};
-
-
-  const handleSavePriceSettings = () => {
+  // Save all settings in one coherent write.
+  // NOTE: Previously, the UI called multiple save functions back-to-back.
+  // Because React state updates are async, the second save could overwrite
+  // fields (e.g. holding_period_days) with stale config values, which looked
+  // like "Save" resetting the user's changes.
+  const handleSaveSettings = () => {
     if (!config) {
       return;
     }
 
+    // Holding period
+    const rawHolding = holdingPeriodInput.trim();
+    let holdingDays = config.holding_period_days ?? DEFAULT_HOLDING_PERIOD_DAYS;
+    if (rawHolding.length > 0) {
+      const parsed = parseInt(rawHolding, 10);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        alert(t(lang, "holding_config_invalid"));
+        return;
+      }
+      holdingDays = parsed;
+    }
+
+    // API key
+    const apiKey = coingeckoApiKeyInput.trim();
+
     const nextConfig: AppConfig = {
-      holding_period_days:
-        config.holding_period_days ?? DEFAULT_HOLDING_PERIOD_DAYS,
+      holding_period_days: holdingDays,
       upcoming_holding_window_days:
         config.upcoming_holding_window_days ?? DEFAULT_UPCOMING_WINDOW_DAYS,
       base_currency: config.base_currency ?? "EUR",
       price_fetch_enabled: priceFetchEnabledInput,
-      coingecko_api_key:
-        coingeckoApiKeyInput.trim().length > 0
-          ? coingeckoApiKeyInput.trim()
-          : null,
+      coingecko_api_key: apiKey.length > 0 ? apiKey : null,
     };
 
     setConfig(nextConfig);
@@ -1820,24 +1801,25 @@ const handleReloadHoldingPrices = async () => {
 <div className="settings-actions">
                 <button
                   type="button"
-                  className="btn-primary"
+                  className={isSettingsDirty ? "btn-primary" : "btn-secondary"}
                   onClick={() => {
-                    if (config) {
-                      handleSaveHoldingConfig();
-                      handleSavePriceSettings();
+                    if (isSettingsDirty) {
+                      if (config) {
+                        handleSaveSettings();
+                      }
+
+                      // Do not force-set isSettingsDirty here.
+                      // The dirty-state should be derived from (config vs inputs),
+                      // so that failed validations keep the button as "Save".
+                    } else {
+                      setIsSettingsOpen(false);
                     }
-                    setIsSettingsDirty(false);
                   }}
-                  disabled={!isSettingsDirty || !config}
+                  disabled={isSettingsDirty && !config}
                 >
-                  {t(lang, "settings_save_button")}
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => setIsSettingsOpen(false)}
-                >
-                  {t(lang, "common_close")}
+                  {isSettingsDirty
+                    ? t(lang, "settings_save_button")
+                    : t(lang, "common_close")}
                 </button>
               </div>
             </section>
