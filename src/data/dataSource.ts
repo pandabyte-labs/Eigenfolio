@@ -143,6 +143,8 @@ export interface PortfolioDataSource {
     source: string | null;
     note: string | null;
     tx_id: string | null;
+    linked_tx_prev_id?: number | null;
+    linked_tx_next_id?: number | null;
   }): Promise<void>;
 
   deleteTransaction(id: number): Promise<void>;
@@ -246,6 +248,136 @@ function getNextLocalId(): number {
     const maxId = items.reduce((acc, tx) => (tx.id && tx.id > acc ? tx.id : acc), 0);
     return maxId + 1;
   }
+}
+
+function sanitizeLinkedTxId(candidate: unknown): number | null {
+  if (typeof candidate !== "number") {
+    return null;
+  }
+  if (!Number.isFinite(candidate)) {
+    return null;
+  }
+  const id = Math.trunc(candidate);
+  return id > 0 ? id : null;
+}
+
+function buildTxIndex(items: Transaction[]): Map<number, Transaction> {
+  const map = new Map<number, Transaction>();
+  for (const tx of items) {
+    if (typeof tx.id === "number" && Number.isFinite(tx.id)) {
+      map.set(tx.id, tx);
+    }
+  }
+  return map;
+}
+
+/**
+ * Ensures that linked_tx_prev_id / linked_tx_next_id are always consistent in both directions.
+ *
+ * Rules:
+ * - Dangling references to missing tx ids are removed.
+ * - If A.prev=B then B.next=A (and any displaced previous B.next is detached).
+ * - If A.next=C then C.prev=A (and any displaced previous C.prev is detached).
+ */
+function normalizeLinkedTransactionGraph(items: Transaction[]): boolean {
+  const map = buildTxIndex(items);
+  let changed = false;
+
+  const detachPrev = (txId: number, expectedPrev: number) => {
+    const tx = map.get(txId);
+    if (!tx) return;
+    if (tx.linked_tx_prev_id === expectedPrev) {
+      tx.linked_tx_prev_id = null;
+      changed = true;
+    }
+  };
+
+  const detachNext = (txId: number, expectedNext: number) => {
+    const tx = map.get(txId);
+    if (!tx) return;
+    if (tx.linked_tx_next_id === expectedNext) {
+      tx.linked_tx_next_id = null;
+      changed = true;
+    }
+  };
+
+  const setPrev = (txId: number, prevId: number) => {
+    const tx = map.get(txId);
+    if (!tx) return;
+    if (tx.linked_tx_prev_id !== prevId) {
+      tx.linked_tx_prev_id = prevId;
+      changed = true;
+    }
+  };
+
+  const setNext = (txId: number, nextId: number) => {
+    const tx = map.get(txId);
+    if (!tx) return;
+    if (tx.linked_tx_next_id !== nextId) {
+      tx.linked_tx_next_id = nextId;
+      changed = true;
+    }
+  };
+
+  // 1) Sanitize local pointers (remove obvious invalid references).
+  for (const tx of items) {
+    const id = sanitizeLinkedTxId(tx.id);
+    if (!id) continue;
+
+    let prevId = sanitizeLinkedTxId(tx.linked_tx_prev_id);
+    let nextId = sanitizeLinkedTxId(tx.linked_tx_next_id);
+
+    if (prevId === id) prevId = null;
+    if (nextId === id) nextId = null;
+    if (prevId != null && !map.has(prevId)) prevId = null;
+    if (nextId != null && !map.has(nextId)) nextId = null;
+    if (prevId != null && nextId != null && prevId === nextId) {
+      // Avoid self-contained 2-node loop on the same neighbor.
+      nextId = null;
+    }
+
+    if (tx.linked_tx_prev_id !== prevId) {
+      tx.linked_tx_prev_id = prevId;
+      changed = true;
+    }
+    if (tx.linked_tx_next_id !== nextId) {
+      tx.linked_tx_next_id = nextId;
+      changed = true;
+    }
+  }
+
+  // 2) Enforce bidirectional edges (stable order).
+  const ids = [...map.keys()].sort((a, b) => a - b);
+  for (const id of ids) {
+    const tx = map.get(id);
+    if (!tx) continue;
+
+    const prevId = sanitizeLinkedTxId(tx.linked_tx_prev_id);
+    if (prevId != null) {
+      const prevTx = map.get(prevId);
+      if (prevTx) {
+        const displaced = sanitizeLinkedTxId(prevTx.linked_tx_next_id);
+        if (displaced != null && displaced !== id) {
+          detachPrev(displaced, prevId);
+        }
+        setNext(prevId, id);
+      }
+    }
+
+    const nextId = sanitizeLinkedTxId(tx.linked_tx_next_id);
+    if (nextId != null) {
+      const nextTx = map.get(nextId);
+      if (nextTx) {
+        const displaced = sanitizeLinkedTxId(nextTx.linked_tx_prev_id);
+        if (displaced != null && displaced !== id) {
+          detachNext(displaced, nextId);
+        }
+        setPrev(nextId, id);
+      }
+    }
+  }
+
+  return changed;
 }
 
 
@@ -445,6 +577,18 @@ class LocalDataSource implements PortfolioDataSource {
     setCoingeckoApiKey(config.coingecko_api_key ?? null);
     const rawTxs = loadLocalTransactions();
 
+    // Repair legacy data where linked transactions were stored only one-way.
+    // Persist fixes so that subsequent edits don't reintroduce inconsistencies.
+    try {
+      const copy = [...rawTxs];
+      const changed = normalizeLinkedTransactionGraph(copy);
+      if (changed) {
+        saveLocalTransactions(copy);
+      }
+    } catch (err) {
+      console.warn("Failed to normalize linked transactions", err);
+    }
+
     const baseCurrency: "EUR" | "USD" =
       config.base_currency === "USD" ? "USD" : "EUR";
 
@@ -489,90 +633,176 @@ class LocalDataSource implements PortfolioDataSource {
     source: string | null;
     note: string | null;
     tx_id: string | null;
+    linked_tx_prev_id?: number | null;
+    linked_tx_next_id?: number | null;
   }): Promise<void> {
     const items = loadLocalTransactions();
+
+    const priceFiat = payload.price_fiat;
+    const fiatValue =
+      priceFiat != null && Number.isFinite(priceFiat)
+        ? priceFiat * payload.amount
+        : null;
+
     const isEdit = payload.id != null;
+    let txId: number;
+    let index = -1;
+    let oldPrev: number | null = null;
+    let oldNext: number | null = null;
 
     if (isEdit) {
-      const index = items.findIndex((tx) => tx.id === payload.id);
-      if (index !== -1) {
-        const priceFiat = payload.price_fiat;
-        const fiatValue =
-          priceFiat != null && Number.isFinite(priceFiat)
-            ? priceFiat * payload.amount
-            : null;
-
-        items[index] = {
-          ...items[index],
-          asset_symbol: payload.asset_symbol,
-          tx_type: payload.tx_type,
-          amount: payload.amount,
-          price_fiat: priceFiat,
-          fiat_currency: payload.fiat_currency,
-          timestamp: payload.timestamp,
-          source: payload.source,
-          note: payload.note,
-          tx_id: payload.tx_id,
-          fiat_value: fiatValue,
-          // Leave value_eur/value_usd as-is or null; will be recomputed later.
-        };
-      } else {
-        // If not found, treat as new.
-        const id = getNextLocalId();
-        const priceFiat = payload.price_fiat;
-        const fiatValue =
-          priceFiat != null && Number.isFinite(priceFiat)
-            ? priceFiat * payload.amount
-            : null;
-
-        items.push({
-          id,
-          asset_symbol: payload.asset_symbol,
-          tx_type: payload.tx_type,
-          amount: payload.amount,
-          price_fiat: priceFiat,
-          fiat_currency: payload.fiat_currency,
-          timestamp: payload.timestamp,
-          source: payload.source,
-          note: payload.note,
-          tx_id: payload.tx_id,
-          fiat_value: fiatValue,
-          value_eur: null,
-          value_usd: null,
-        });
-      }
-    } else {
-      const id = getNextLocalId();
-      const priceFiat = payload.price_fiat;
-      const fiatValue =
-        priceFiat != null && Number.isFinite(priceFiat)
-          ? priceFiat * payload.amount
-          : null;
-
-      items.push({
-        id,
-        asset_symbol: payload.asset_symbol,
-        tx_type: payload.tx_type,
-        amount: payload.amount,
-        price_fiat: priceFiat,
-        fiat_currency: payload.fiat_currency,
-        timestamp: payload.timestamp,
-        source: payload.source,
-        note: payload.note,
-        tx_id: payload.tx_id,
-        fiat_value: fiatValue,
-        value_eur: null,
-        value_usd: null,
-      });
+      index = items.findIndex((tx) => tx.id === payload.id);
     }
 
+    if (isEdit && index !== -1) {
+      txId = items[index].id;
+      oldPrev = sanitizeLinkedTxId(items[index].linked_tx_prev_id);
+      oldNext = sanitizeLinkedTxId(items[index].linked_tx_next_id);
+    } else {
+      txId = getNextLocalId();
+    }
+
+    let newPrev = sanitizeLinkedTxId(payload.linked_tx_prev_id);
+    let newNext = sanitizeLinkedTxId(payload.linked_tx_next_id);
+    if (newPrev === txId) newPrev = null;
+    if (newNext === txId) newNext = null;
+    if (newPrev != null && newNext != null && newPrev === newNext) {
+      // Avoid ambiguous linking to the same neighbor for both sides.
+      newNext = null;
+    }
+
+    const upsert: Transaction = {
+      id: txId,
+      asset_symbol: payload.asset_symbol,
+      tx_type: payload.tx_type,
+      amount: payload.amount,
+      price_fiat: priceFiat,
+      fiat_currency: payload.fiat_currency,
+      timestamp: payload.timestamp,
+      source: payload.source,
+      note: payload.note,
+      tx_id: payload.tx_id,
+      linked_tx_prev_id: newPrev,
+      linked_tx_next_id: newNext,
+      fiat_value: fiatValue,
+      // Leave value_eur/value_usd as-is or null; will be recomputed later.
+      value_eur: null,
+      value_usd: null,
+    };
+
+    if (isEdit && index !== -1) {
+      items[index] = {
+        ...items[index],
+        ...upsert,
+        // Preserve computed values unless the user overwrote them via import.
+        value_eur: items[index].value_eur ?? null,
+        value_usd: items[index].value_usd ?? null,
+      };
+    } else {
+      items.push(upsert);
+      oldPrev = null;
+      oldNext = null;
+    }
+
+    // Targeted reconciliation for the edited/created transaction.
+    const map = buildTxIndex(items);
+    const detachIfMatched = (
+      neighborId: number | null,
+      field: "linked_tx_prev_id" | "linked_tx_next_id",
+    ) => {
+      if (neighborId == null) return;
+      const tx = map.get(neighborId);
+      if (!tx) return;
+      const current = sanitizeLinkedTxId(tx[field]);
+      if (current === txId) {
+        tx[field] = null;
+      }
+    };
+
+    // If this tx is re-linked, detach previous neighbors that pointed to it.
+    if (oldPrev != null && oldPrev !== newPrev) {
+      detachIfMatched(oldPrev, "linked_tx_next_id");
+    }
+    if (oldNext != null && oldNext !== newNext) {
+      detachIfMatched(oldNext, "linked_tx_prev_id");
+    }
+
+    // Attach new neighbors (and detach any displaced links on the neighbor side).
+    if (newPrev != null) {
+      const prevTx = map.get(newPrev);
+      if (prevTx) {
+        const displaced = sanitizeLinkedTxId(prevTx.linked_tx_next_id);
+        if (displaced != null && displaced !== txId) {
+          const displacedTx = map.get(displaced);
+          if (displacedTx && sanitizeLinkedTxId(displacedTx.linked_tx_prev_id) === newPrev) {
+            displacedTx.linked_tx_prev_id = null;
+          }
+        }
+        prevTx.linked_tx_next_id = txId;
+      }
+    }
+
+    if (newNext != null) {
+      const nextTx = map.get(newNext);
+      if (nextTx) {
+        const displaced = sanitizeLinkedTxId(nextTx.linked_tx_prev_id);
+        if (displaced != null && displaced !== txId) {
+          const displacedTx = map.get(displaced);
+          if (displacedTx && sanitizeLinkedTxId(displacedTx.linked_tx_next_id) === newNext) {
+            displacedTx.linked_tx_next_id = null;
+          }
+        }
+        nextTx.linked_tx_prev_id = txId;
+      }
+    }
+
+    // Final safety pass to prevent dangling or one-way links.
+    normalizeLinkedTransactionGraph(items);
+    // Links coming from CSV may be incomplete or one-way. Normalize so that the
+    // chain representation is consistent.
+    normalizeLinkedTransactionGraph(items);
     saveLocalTransactions(items);
   }
 
   async deleteTransaction(id: number): Promise<void> {
     const items = loadLocalTransactions();
-    const filtered = items.filter((tx) => tx.id !== id);
-    saveLocalTransactions(filtered);
+    const index = items.findIndex((tx) => tx.id === id);
+    if (index === -1) {
+      return;
+    }
+
+    const target = items[index];
+    const prevId = sanitizeLinkedTxId(target.linked_tx_prev_id);
+    const nextId = sanitizeLinkedTxId(target.linked_tx_next_id);
+
+    // Remove the transaction itself.
+    items.splice(index, 1);
+
+    const map = buildTxIndex(items);
+    const prevTx = prevId != null ? map.get(prevId) : undefined;
+    const nextTx = nextId != null ? map.get(nextId) : undefined;
+
+    // Prefer to keep the chain intact when removing the middle of a consistent chain.
+    const canBridge =
+      prevTx &&
+      nextTx &&
+      sanitizeLinkedTxId(prevTx.linked_tx_next_id) === id &&
+      sanitizeLinkedTxId(nextTx.linked_tx_prev_id) === id;
+
+    if (canBridge) {
+      prevTx.linked_tx_next_id = nextId;
+      nextTx.linked_tx_prev_id = prevId;
+    } else {
+      if (prevTx && sanitizeLinkedTxId(prevTx.linked_tx_next_id) === id) {
+        prevTx.linked_tx_next_id = null;
+      }
+      if (nextTx && sanitizeLinkedTxId(nextTx.linked_tx_prev_id) === id) {
+        nextTx.linked_tx_prev_id = null;
+      }
+    }
+
+    normalizeLinkedTransactionGraph(items);
+    saveLocalTransactions(items);
   }
 
   async importCsv(lang: Language, file: File): Promise<CsvImportResult> {
@@ -749,6 +979,18 @@ class LocalDataSource implements PortfolioDataSource {
           }
         }
 
+        let linkedPrevId: number | null = null;
+        if (record["linked_tx_prev_id"]) {
+          const parsed = parseInt(record["linked_tx_prev_id"].trim(), 10);
+          linkedPrevId = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+        }
+
+        let linkedNextId: number | null = null;
+        if (record["linked_tx_next_id"]) {
+          const parsed = parseInt(record["linked_tx_next_id"].trim(), 10);
+          linkedNextId = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+        }
+
         const tx: Transaction = {
           id,
           asset_symbol: (record["asset_symbol"] || "").toUpperCase(),
@@ -760,6 +1002,8 @@ class LocalDataSource implements PortfolioDataSource {
           source: record["source"] || null,
           note: record["note"] || null,
           tx_id: record["tx_id"] || null,
+          linked_tx_prev_id: linkedPrevId,
+          linked_tx_next_id: linkedNextId,
           fiat_value: fiatValue,
           value_eur: valueEur,
           value_usd: valueUsd,
@@ -783,6 +1027,7 @@ class LocalDataSource implements PortfolioDataSource {
       }
     }
 
+    normalizeLinkedTransactionGraph(items);
     saveLocalTransactions(items);
 
     return {
