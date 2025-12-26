@@ -2031,20 +2031,35 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       return Math.max(minWidth, len * baseCharWidth);
     });
 
+    // Default spacing between columns (in pseudo-pt). We apply per-gap adjustments
+    // to avoid wasting space in compact columns while keeping enough air between
+    // visually dense columns.
     const baseColGap = 1.6;
+
+    // gapFactors[i] applies to the gap between column i and i+1.
+    // - Slightly tighter between ID and Chain.
+    // - Much tighter between Chain and Time.
+    // - Slightly more space between Currency and Source.
+    const gapFactors = new Array<number>(colCount - 1).fill(1);
+    gapFactors[0] = 0.85; // ID -> Chain
+    gapFactors[1] = 0.45; // Chain -> Time
+    gapFactors[currencyColIndex] = 1.35; // Currency -> Source
+
+    const rawGaps = gapFactors.map((f) => baseColGap * f);
     const totalRawWidth = rawWidths.reduce((sum, w) => sum + w, 0);
-    const totalRawWidthWithGaps = totalRawWidth + baseColGap * (colCount - 1);
+    const totalRawGaps = rawGaps.reduce((sum, g) => sum + g, 0);
+    const totalRawWidthWithGaps = totalRawWidth + totalRawGaps;
     const scale = totalRawWidthWithGaps > usableWidth ? usableWidth / totalRawWidthWithGaps : 1;
 
     const colWidths = rawWidths.map((w) => w * scale);
-    const colGap = baseColGap * scale;
+    const colGaps = rawGaps.map((g) => g * scale);
 
     const colX: number[] = [];
     {
       let acc = marginLeft;
-      for (const w of colWidths) {
+      for (let i = 0; i < colWidths.length; i++) {
         colX.push(acc);
-        acc += w + colGap;
+        acc += colWidths[i] + (i < colGaps.length ? colGaps[i] : 0);
       }
     }
 
