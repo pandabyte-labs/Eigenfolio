@@ -1948,7 +1948,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       if (col === 0) {
         maxCap = 7; // ID
       } else if (col === 1) {
-        maxCap = 17; // Chain (wraps)
+        maxCap = 10; // Chain
       } else if (col === 2) {
         maxCap = 16; // Time
       } else if (col === 3) {
@@ -1986,8 +1986,17 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
     // Column width estimation is intentionally heuristic. We slightly compress very short
     // categorical columns to gain room for text-heavy columns on the right.
     const rawWidths = charWidths.map((len, idx) => {
-      const factor = idx === 0 ? 1.6 : idx === 8 ? 1.9 : baseCharWidth;
-      const min = idx === 0 ? 10 : 12;
+      // The Chain column is formatted as exactly two lines (Next/Prev), so we can keep
+      // it a bit narrower than other text columns to pull "Time" closer.
+      const factor =
+        idx === 0
+          ? 1.6
+          : idx === 1
+            ? 1.55
+            : idx === 8
+              ? 1.9
+              : baseCharWidth;
+      const min = idx === 0 ? 10 : idx === 1 ? 14 : 12;
       return Math.max(min, len * factor);
     });
     const totalRawWidth = rawWidths.reduce((sum, w) => sum + w, 0);
