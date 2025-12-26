@@ -1723,7 +1723,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       if (col === 0) {
         maxCap = 7; // ID
       } else if (col === 1) {
-        maxCap = 14; // Chain (wraps)
+        maxCap = 17; // Chain (wraps)
       } else if (col === 2) {
         maxCap = 16; // Time
       } else if (col === 3) {
@@ -1735,7 +1735,7 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
       } else if (col === 6) {
         maxCap = 22; // Price
       } else if (col === 8) {
-        maxCap = 10; // Currency
+        maxCap = 9; // Currency
       } else if (col === 9) {
         maxCap = 18; // Source
       } else if (col === 10) {
@@ -1748,13 +1748,23 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
         maxCap = 18;
       }
 
-      const effectiveLen = Math.min(maxLen + 1, maxCap);
+      // Character padding that acts like a little intra-cell breathing room. For the first
+      // columns (ID) and the short categorical column (Currency) we keep this at 0 to avoid
+      // wasting horizontal space.
+      const paddingChars = col === 0 || col === 8 ? 0 : 1;
+      const effectiveLen = Math.min(maxLen + paddingChars, maxCap);
       // Do not let columns become too narrow so that headers remain readable.
       charWidths[col] = Math.max(6, effectiveLen);
     }
 
     const baseCharWidth = 2.0;
-    const rawWidths = charWidths.map((len) => Math.max(12, len * baseCharWidth));
+    // Column width estimation is intentionally heuristic. We slightly compress very short
+    // categorical columns to gain room for text-heavy columns on the right.
+    const rawWidths = charWidths.map((len, idx) => {
+      const factor = idx === 0 ? 1.6 : idx === 8 ? 1.9 : baseCharWidth;
+      const min = idx === 0 ? 10 : 12;
+      return Math.max(min, len * factor);
+    });
     const totalRawWidth = rawWidths.reduce((sum, w) => sum + w, 0);
 
     // Column spacing (in pt/mm units used by jsPDF). We intentionally keep these small because
@@ -1766,9 +1776,9 @@ if (txType === "TRANSFER_IN" || txType === "TRANSFER_OUT") {
     // - ID ↔ Chain: slightly tighter
     // - Chain ↔ Time: tighter
     // - Currency ↔ Source: a bit more breathing room
-    if (colGaps.length >= 1) colGaps[0] = 1.5;
-    if (colGaps.length >= 2) colGaps[1] = 1.5;
-    if (colGaps.length >= 9) colGaps[8] = 2.6;
+    if (colGaps.length >= 1) colGaps[0] = 1.3;
+    if (colGaps.length >= 2) colGaps[1] = 1.2;
+    if (colGaps.length >= 9) colGaps[8] = 2.2;
 
     const totalGaps = colGaps.reduce((sum, g) => sum + g, 0);
     const usableWidthForCols = Math.max(10, usableWidth - totalGaps);
