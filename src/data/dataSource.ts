@@ -1020,6 +1020,7 @@ class LocalDataSource implements PortfolioDataSource {
         items.push(tx);
         existingKeys.add(key);
         importedKeys.add(key);
+        importedCount += 1;
       } catch {
         errors.push(
           `${t(lang, "csv_import_error_line_prefix")} ${lineIndex + 1}: ${t(lang, "csv_import_unknown_error")}`,
@@ -1230,6 +1231,7 @@ class LocalDataSource implements PortfolioDataSource {
         items.push(tx);
         existingKeys.add(key);
         importedKeys.add(key);
+        importedCount += 1;
       } catch (err) {
         console.error("Failed to import Binance row", err);
         const msg = err instanceof Error ? err.message : String(err);
