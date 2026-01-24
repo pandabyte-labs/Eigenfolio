@@ -11,6 +11,37 @@ export type TraekyDbFileFormatV1 = {
   kv: Record<string, unknown>;
 };
 
+type SaveFilePickerOptionsLike = {
+  suggestedName?: string;
+  types?: Array<{
+    description?: string;
+    accept?: Record<string, string[]>;
+  }>;
+};
+
+type WritableFileStreamLike = {
+  write: (data: string) => Promise<void>;
+  close: () => Promise<void>;
+};
+
+type FileHandleLike = {
+  name?: string;
+  getFile: () => Promise<File>;
+  createWritable: () => Promise<WritableFileStreamLike>;
+};
+
+function getFsApi(): { showSaveFilePicker?: (options: SaveFilePickerOptionsLike) => Promise<FileHandleLike> } {
+  return window as unknown as {
+    showSaveFilePicker?: (options: SaveFilePickerOptionsLike) => Promise<FileHandleLike>;
+  };
+}
+
+function isFileHandleLike(value: unknown): value is FileHandleLike {
+  if (typeof value !== "object" || value === null) return false;
+  const rec = value as Record<string, unknown>;
+  return typeof rec["getFile"] === "function" && typeof rec["createWritable"] === "function";
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -28,7 +59,7 @@ function isKeyExportable(key: string): boolean {
 
 export function isFileSystemAccessSupported(): boolean {
   // Chromium-based browsers
-  return typeof (window as any)?.showSaveFilePicker === "function";
+  return typeof getFsApi().showSaveFilePicker === "function";
 }
 
 export async function exportTraekyDbToJson(): Promise<string> {
@@ -79,7 +110,12 @@ export async function pickOrCreateSyncFile(): Promise<void> {
     throw new Error("File System Access API is not supported in this browser");
   }
 
-  const handle = await (window as any).showSaveFilePicker({
+  const fsApi = getFsApi();
+  if (!fsApi.showSaveFilePicker) {
+    throw new Error("File System Access API is not supported in this browser");
+  }
+
+  const handle = await fsApi.showSaveFilePicker({
     suggestedName: "traeky.db",
     types: [
       {
@@ -93,29 +129,27 @@ export async function pickOrCreateSyncFile(): Promise<void> {
 }
 
 export async function getSyncFileName(): Promise<string | null> {
-  const handle = await kvGet<any>(SYNC_FILE_HANDLE_KEY);
-  if (!handle) return null;
-  return typeof handle.name === "string" ? handle.name : "traeky.db";
+  const handleRaw = await kvGet<unknown>(SYNC_FILE_HANDLE_KEY);
+  if (!isFileHandleLike(handleRaw)) return null;
+  return typeof handleRaw.name === "string" ? handleRaw.name : "traeky.db";
 }
 
 export async function writeSyncFileNow(): Promise<void> {
-  const handle = await kvGet<any>(SYNC_FILE_HANDLE_KEY);
-  if (!handle) {
-    return;
-  }
+  const handleRaw = await kvGet<unknown>(SYNC_FILE_HANDLE_KEY);
+  if (!isFileHandleLike(handleRaw)) return;
   const json = await exportTraekyDbToJson();
-  const writable = await handle.createWritable();
+  const writable = await handleRaw.createWritable();
   await writable.write(json);
   await writable.close();
   await kvSet(DB_LAST_WRITE_KEY, nowIso());
 }
 
 export async function readSyncFileIfNewer(): Promise<boolean> {
-  const handle = await kvGet<any>(SYNC_FILE_HANDLE_KEY);
-  if (!handle) return false;
+  const handleRaw = await kvGet<unknown>(SYNC_FILE_HANDLE_KEY);
+  if (!isFileHandleLike(handleRaw)) return false;
 
   try {
-    const file: File = await handle.getFile();
+    const file: File = await handleRaw.getFile();
     const json = await file.text();
     const parsed = JSON.parse(json) as Partial<TraekyDbFileFormatV1>;
     if (!parsed || parsed.magic !== "traeky.db" || parsed.version !== 1) {

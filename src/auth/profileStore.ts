@@ -92,16 +92,6 @@ function readJson<T>(key: string): T | null {
   }
 }
 
-function writeJson(key: string, value: unknown): void {
-  const storage = getStorage();
-  if (!storage) return;
-  try {
-    storage.setItem(key, JSON.stringify(value));
-  } catch {
-    // Ignore persistence errors.
-  }
-}
-
 function removeKey(key: string): void {
   const storage = getStorage();
   if (!storage) return;
@@ -234,19 +224,27 @@ function profileHasLegacyData(): boolean {
 }
 
 function validateProfilesIndex(value: unknown): ProfilesIndex {
-  const idx = value as ProfilesIndex | null;
-  if (!idx || !Array.isArray((idx as any).profiles)) {
+  const idx = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+  const profilesRaw = idx ? idx["profiles"] : null;
+  if (!idx || !Array.isArray(profilesRaw)) {
     return { currentProfileId: null, profiles: [] };
   }
-  return {
-    currentProfileId: idx.currentProfileId ?? null,
-    profiles: idx.profiles.map((p) => ({
-      id: (p as any).id,
-      name: (p as any).name,
-      createdAt: (p as any).createdAt,
-      updatedAt: (p as any).updatedAt,
-    })),
-  };
+
+  const currentProfileId = typeof idx["currentProfileId"] === "string" ? idx["currentProfileId"] : null;
+  const profiles: ProfileSummary[] = profilesRaw
+    .map((p) => {
+      const rec = typeof p === "object" && p !== null ? (p as Record<string, unknown>) : null;
+      if (!rec) return null;
+      const id = typeof rec["id"] === "string" ? rec["id"] : null;
+      const name = typeof rec["name"] === "string" ? rec["name"] : "";
+      const createdAt = typeof rec["createdAt"] === "string" ? rec["createdAt"] : nowIso();
+      const updatedAt = typeof rec["updatedAt"] === "string" ? rec["updatedAt"] : createdAt;
+      if (!id) return null;
+      return { id, name, createdAt, updatedAt };
+    })
+    .filter((p): p is ProfileSummary => p !== null);
+
+  return { currentProfileId, profiles };
 }
 
 function validatePinIndex(value: unknown): ProfilePinIndex {
