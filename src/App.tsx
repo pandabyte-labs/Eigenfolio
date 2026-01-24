@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createPortfolioDataSource, type PortfolioDataSource, computeLocalHoldings, computeLocalExpiring, loadLocalTransactions, saveLocalAppConfig } from "./data/dataSource";
 import { useAuth } from "./auth/AuthContext";
 import {
+  initProfileStore,
   getProfileOverview,
   type ProfileOverview,
   type ProfileSummary,
@@ -16,6 +17,13 @@ import {
   getActiveProfileSummary,
   logoutActiveProfileSession,
 } from "./auth/profileStore";
+import {
+  isFileSystemAccessSupported,
+  pickOrCreateSyncFile,
+  getSyncFileName,
+  writeSyncFileNow,
+  importTraekyDbFromJson,
+} from "./storage/traekyDbFile";
 import { t, Language, getDefaultLanguage } from "./i18n";
 import { CURRENT_CSV_SCHEMA_VERSION, CSV_SCHEMA_VERSION_COLUMN } from "./data/csvSchema";
 import { Transaction, HoldingsItem, HoldingsResponse, CsvImportResult, AppConfig, ExpiringHolding } from "./domain/types";
@@ -219,6 +227,11 @@ const App: React.FC = () => {
     }
     return getDefaultLanguage();
   });
+
+  const [syncFileName, setSyncFileName] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<string | null>(null);
+  const [syncBusy, setSyncBusy] = useState(false);
+  const syncImportRef = useRef<HTMLInputElement | null>(null);
   const [holdings, setHoldings] = useState<HoldingsItem[]>([]);
   const [holdingsPortfolioEur, setHoldingsPortfolioEur] = useState<number | null>(
     null
@@ -324,11 +337,19 @@ const App: React.FC = () => {
 
   
   useEffect(() => {
-    const overview = getProfileOverview();
-    setProfileOverview(overview);
-    if (overview.profiles.length > 0 && !loginProfileId) {
-      setLoginProfileId(overview.profiles[0].id);
-    }
+    void (async () => {
+      await initProfileStore();
+      const overview = getProfileOverview();
+      setProfileOverview(overview);
+      try {
+        setSyncFileName(await getSyncFileName());
+      } catch {
+        setSyncFileName(null);
+      }
+      if (overview.profiles.length > 0 && !loginProfileId) {
+        setLoginProfileId(overview.profiles[0].id);
+      }
+    })();
     // We intentionally run this only once during initial mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -683,6 +704,65 @@ useEffect(() => {
       );
     }
 
+  };
+
+  const handlePickSyncFile = async () => {
+    setSyncStatus(null);
+    setSyncBusy(true);
+    try {
+      if (!isFileSystemAccessSupported()) {
+        setSyncStatus(t(lang, "db_sync_not_supported"));
+        return;
+      }
+      await pickOrCreateSyncFile();
+      setSyncFileName(await getSyncFileName());
+      setSyncStatus(t(lang, "db_sync_enabled"));
+    } catch (err) {
+      console.error("Failed to configure traeky.db sync", err);
+      setSyncStatus(t(lang, "db_sync_error"));
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
+  const handleExportSyncNow = async () => {
+    setSyncStatus(null);
+    setSyncBusy(true);
+    try {
+      await writeSyncFileNow();
+      setSyncFileName(await getSyncFileName());
+      setSyncStatus(t(lang, "db_sync_exported"));
+    } catch (err) {
+      console.error("Failed to export traeky.db", err);
+      setSyncStatus(t(lang, "db_sync_error"));
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
+  const handleImportSyncFile = async (file: File) => {
+    setSyncStatus(null);
+    setSyncBusy(true);
+    try {
+      const json = await file.text();
+      await importTraekyDbFromJson(json);
+      setSyncStatus(t(lang, "db_sync_imported"));
+      // Re-initialize store and prompt re-login (active session might no longer match).
+      logoutActiveProfileSession();
+      setActiveProfile(null);
+      await initProfileStore();
+      const overview = getProfileOverview();
+      setProfileOverview(overview);
+      if (overview.profiles.length > 0) {
+        setLoginProfileId(overview.profiles[0].id);
+        setIsProfileLoginOverlayOpen(true);
+      }
+    } catch (err) {
+      console.error("Failed to import traeky.db", err);
+      setSyncStatus(t(lang, "db_sync_error"));
+    } finally {
+      setSyncBusy(false);
+    }
   };
   useEffect(() => {
     // Optimistically load local transactions and holdings from storage
@@ -1202,6 +1282,7 @@ const handleReloadHoldingPrices = async () => {
                 <p className="muted">{t(lang, "profile_setup_security_info")}</p>
                 <h3>{t(lang, "profile_setup_title")}</h3>
                 <p className="muted">{t(lang, "profile_setup_description")}</p>
+                <p className="muted">{t(lang, "profile_pin_scope_notice")}</p>
                 {profileOverview.hasLegacyData && (
                   <p className="muted" style={{ marginTop: "0.5rem" }}>
                     {t(lang, "profile_setup_description_migrate")}
@@ -1261,6 +1342,7 @@ const handleReloadHoldingPrices = async () => {
               <>
                 <h2>Traeky</h2>
                 <p className="muted">{t(lang, "profile_login_description")}</p>
+                <p className="muted">{t(lang, "profile_pin_scope_notice")}</p>
                 {loginError && <p className="error-text modal-error">{loginError}</p>}
                 <form
                   onSubmit={handleProfileLoginSubmit}
@@ -1416,6 +1498,56 @@ const handleReloadHoldingPrices = async () => {
             </p>
           </div>
         </div>
+          </div>
+          <div className="card settings-card">
+<div className="sidebar-section">
+          <h2>{t(lang, "db_sync_title")}</h2>
+          <p className="muted">{t(lang, "db_sync_description")}</p>
+          <p className="muted">
+            {t(lang, "db_sync_file_label")}:{" "}
+            <strong>{syncFileName ?? t(lang, "db_sync_file_none")}</strong>
+          </p>
+          {syncStatus && <p className="muted" style={{ marginTop: "0.5rem" }}>{syncStatus}</p>}
+          <div className="modal-actions" style={{ marginTop: "0.75rem", justifyContent: "flex-start" }}>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handlePickSyncFile}
+              disabled={syncBusy}
+            >
+              {t(lang, "db_sync_pick_button")}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleExportSyncNow}
+              disabled={syncBusy || !syncFileName}
+            >
+              {t(lang, "db_sync_export_button")}
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => syncImportRef.current?.click()}
+              disabled={syncBusy}
+            >
+              {t(lang, "db_sync_import_button")}
+            </button>
+            <input
+              ref={syncImportRef}
+              type="file"
+              accept=".db,.json,application/json"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const file = e.target.files && e.target.files[0];
+                e.target.value = "";
+                if (!file) return;
+                void handleImportSyncFile(file);
+              }}
+            />
+          </div>
+        </div>
+
           </div>
           <div className="card settings-card">
 <div className="sidebar-section">

@@ -2,7 +2,15 @@
 import type { AppConfig, Transaction } from "../domain/types";
 import { DEFAULT_HOLDING_PERIOD_DAYS, DEFAULT_UPCOMING_WINDOW_DAYS } from "../domain/config";
 import type { EncryptedPayload } from "../crypto/cryptoService";
-import { hashPin, encryptProfilePayload, decryptProfilePayload } from "./profileSecurity";
+import {
+  hashPinLegacy,
+  hashPinForProfile,
+  decryptProfilePayload,
+  encryptProfilePayload,
+  decryptProfilePayloadLegacy,
+} from "./profileSecurity";
+import { kvGet, kvSet, kvDel } from "../storage/kvDb";
+import { readSyncFileIfNewer, scheduleAutoSync } from "../storage/traekyDbFile";
 
 export type ProfileId = string;
 
@@ -47,24 +55,19 @@ const LEGACY_NEXT_ID_KEY = "traeky:next-tx-id";
 const LEGACY_CONFIG_KEY = "traeky:app-config";
 const PROFILE_PIN_INDEX_KEY = "traeky:profiles-pin-index";
 
+type ProfilePinIndexEntryV2 = { v: 2; hash: string };
+type ProfilePinIndexEntryV1 = { v: 1; hash: string };
+type ProfilePinIndexEntry = ProfilePinIndexEntryV1 | ProfilePinIndexEntryV2;
+
 type ProfilePinIndex = {
-  [profileId: string]: string;
+  [profileId: string]: string | ProfilePinIndexEntry;
 };
 
-function readProfilePinIndex(): ProfilePinIndex {
-  const value = readJson<ProfilePinIndex | null>(PROFILE_PIN_INDEX_KEY);
-  if (!value || typeof value !== "object") {
-    return {};
-  }
-  return value;
-}
+let didInit = false;
+let cachedProfilesIndex: ProfilesIndex = { currentProfileId: null, profiles: [] };
+let cachedPinIndex: ProfilePinIndex = {};
 
-function writeProfilePinIndex(index: ProfilePinIndex): void {
-  writeJson(PROFILE_PIN_INDEX_KEY, index);
-}
-
-
-let activeProfile: ActiveProfileSession | null = null;
+let activeProfile: (ActiveProfileSession & { pin: string; pinHashVersion: 1 | 2 }) | null = null;
 
 function getStorage(): Storage | null {
   try {
@@ -121,23 +124,23 @@ function generateProfileId(): ProfileId {
 }
 
 function readProfilesIndex(): ProfilesIndex {
-  const idx = readJson<ProfilesIndex>(LS_PROFILES_INDEX_KEY);
-  if (!idx || !Array.isArray(idx.profiles)) {
-    return { currentProfileId: null, profiles: [] };
-  }
-  return {
-    currentProfileId: idx.currentProfileId ?? null,
-    profiles: idx.profiles.map((p) => ({
-      id: p.id,
-      name: p.name,
-      createdAt: p.createdAt,
-      updatedAt: p.updatedAt,
-    })),
-  };
+  return cachedProfilesIndex;
 }
 
 function writeProfilesIndex(index: ProfilesIndex): void {
-  writeJson(LS_PROFILES_INDEX_KEY, index);
+  cachedProfilesIndex = index;
+  void kvSet(LS_PROFILES_INDEX_KEY, index);
+  scheduleAutoSync();
+}
+
+function readProfilePinIndex(): ProfilePinIndex {
+  return cachedPinIndex;
+}
+
+function writeProfilePinIndex(index: ProfilePinIndex): void {
+  cachedPinIndex = index;
+  void kvSet(PROFILE_PIN_INDEX_KEY, index);
+  scheduleAutoSync();
 }
 
 function buildProfileDataKey(profileId: ProfileId): string {
@@ -230,6 +233,95 @@ function profileHasLegacyData(): boolean {
   }
 }
 
+function validateProfilesIndex(value: unknown): ProfilesIndex {
+  const idx = value as ProfilesIndex | null;
+  if (!idx || !Array.isArray((idx as any).profiles)) {
+    return { currentProfileId: null, profiles: [] };
+  }
+  return {
+    currentProfileId: idx.currentProfileId ?? null,
+    profiles: idx.profiles.map((p) => ({
+      id: (p as any).id,
+      name: (p as any).name,
+      createdAt: (p as any).createdAt,
+      updatedAt: (p as any).updatedAt,
+    })),
+  };
+}
+
+function validatePinIndex(value: unknown): ProfilePinIndex {
+  const idx = value as ProfilePinIndex | null;
+  if (!idx || typeof idx !== "object") {
+    return {};
+  }
+  return idx;
+}
+
+function hasLegacyProfileStorage(): boolean {
+  const storage = getStorage();
+  if (!storage) return false;
+  try {
+    if (storage.getItem(LS_PROFILES_INDEX_KEY) || storage.getItem(PROFILE_PIN_INDEX_KEY)) {
+      return true;
+    }
+    // Best-effort: if any profile payloads exist, migration is needed.
+    for (let i = 0; i < storage.length; i += 1) {
+      const key = storage.key(i);
+      if (key && key.startsWith(PROFILE_DATA_PREFIX) && key.endsWith(PROFILE_DATA_SUFFIX)) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+async function migrateLegacyProfilesToDb(): Promise<void> {
+  const legacyIndex = readJson<ProfilesIndex>(LS_PROFILES_INDEX_KEY);
+  const legacyPinIndex = readJson<ProfilePinIndex>(PROFILE_PIN_INDEX_KEY);
+
+  const safeIndex = validateProfilesIndex(legacyIndex);
+  const safePinIndex = validatePinIndex(legacyPinIndex);
+
+  await kvSet(LS_PROFILES_INDEX_KEY, safeIndex);
+  await kvSet(PROFILE_PIN_INDEX_KEY, safePinIndex);
+
+  for (const p of safeIndex.profiles) {
+    const key = buildProfileDataKey(p.id);
+    const encrypted = readJson<EncryptedPayload>(key);
+    if (encrypted) {
+      await kvSet(key, encrypted);
+    }
+  }
+
+  // Clean up migrated keys to minimize risk of divergence.
+  removeKey(LS_PROFILES_INDEX_KEY);
+  removeKey(PROFILE_PIN_INDEX_KEY);
+  for (const p of safeIndex.profiles) {
+    removeKey(buildProfileDataKey(p.id));
+  }
+}
+
+export async function initProfileStore(): Promise<void> {
+  if (didInit) return;
+
+  // If the user configured a sync file, import it when it is newer than local.
+  await readSyncFileIfNewer();
+
+  const idxFromDb = await kvGet<ProfilesIndex>(LS_PROFILES_INDEX_KEY);
+  if (!idxFromDb && hasLegacyProfileStorage()) {
+    await migrateLegacyProfilesToDb();
+  }
+
+  const idx = validateProfilesIndex(await kvGet(LS_PROFILES_INDEX_KEY));
+  const pinIdx = validatePinIndex(await kvGet(PROFILE_PIN_INDEX_KEY));
+
+  cachedProfilesIndex = idx;
+  cachedPinIndex = pinIdx;
+  didInit = true;
+}
+
 export function getProfileOverview(): ProfileOverview {
   const index = readProfilesIndex();
   return {
@@ -256,11 +348,13 @@ async function persistActiveProfile(): Promise<void> {
   if (!activeProfile) return;
   const payload: ProfileDataPayload = activeProfile.data;
   const encrypted: EncryptedPayload = await encryptProfilePayload(
-    activeProfile.pinHash,
+    activeProfile.meta.id,
+    activeProfile.pin,
     payload,
   );
   const key = buildProfileDataKey(activeProfile.meta.id);
-  writeJson(key, encrypted);
+  await kvSet(key, encrypted);
+  scheduleAutoSync();
   const index = readProfilesIndex();
   const now = nowIso();
   const updatedProfiles = index.profiles.map((p) =>
@@ -274,10 +368,9 @@ async function persistActiveProfile(): Promise<void> {
 
 export async function createInitialProfile(name: string, pin: string): Promise<ProfileSummary> {
   const trimmedName = name.trim() || "Default";
-  const pinHash = await hashPin(pin);
-
   const index = readProfilesIndex();
   const id = generateProfileId();
+  const pinHash = await hashPinForProfile(id, pin);
   const now = nowIso();
   const meta: ProfileSummary = {
     id,
@@ -310,6 +403,8 @@ export async function createInitialProfile(name: string, pin: string): Promise<P
   activeProfile = {
     meta,
     pinHash,
+    pinHashVersion: 2,
+    pin,
     data,
   };
 
@@ -320,7 +415,7 @@ export async function createInitialProfile(name: string, pin: string): Promise<P
   });
 
   const pinIndex = readProfilePinIndex();
-  pinIndex[id] = pinHash;
+  pinIndex[id] = { v: 2, hash: pinHash };
   writeProfilePinIndex(pinIndex);
 
   await persistActiveProfile();
@@ -335,26 +430,57 @@ export async function loginProfile(profileId: ProfileId, pin: string): Promise<P
   }
 
   const pinIndex = readProfilePinIndex();
-  const pinHash = await hashPin(pin);
-
-  let meta: ProfileSummary | null =
-    index.profiles.find((p) => p.id === profileId && pinIndex[p.id] === pinHash) ?? null;
-
+  const meta = index.profiles.find((p) => p.id === profileId) ?? null;
   if (!meta) {
-    meta = index.profiles.find((p) => pinIndex[p.id] === pinHash) ?? null;
+    throw new Error("Profile not found");
   }
 
-  if (!meta) {
+  const stored = pinIndex[meta.id];
+  if (!stored) {
     throw new Error("Invalid PIN");
   }
 
+  const storedEntry: ProfilePinIndexEntry =
+    typeof stored === "string" ? { v: 1, hash: stored } : stored;
+
+  let pinHashVersion: 1 | 2 = storedEntry.v;
+  let pinHash: string;
+  if (storedEntry.v === 2) {
+    pinHash = await hashPinForProfile(meta.id, pin);
+  } else {
+    pinHash = await hashPinLegacy(pin);
+  }
+
+  if (pinHash !== storedEntry.hash) {
+    throw new Error("Invalid PIN");
+  }
+
+  // Upgrade legacy PIN hashes to profile-scoped v2 hashes once we have a valid PIN.
+  if (storedEntry.v === 1) {
+    const upgraded = await hashPinForProfile(meta.id, pin);
+    pinIndex[meta.id] = { v: 2, hash: upgraded };
+    writeProfilePinIndex(pinIndex);
+    pinHashVersion = 2;
+    pinHash = upgraded;
+  }
+
   const key = buildProfileDataKey(meta.id);
-  const encrypted = readJson<EncryptedPayload>(key);
+  const encrypted = await kvGet<EncryptedPayload>(key);
   if (!encrypted) {
     throw new Error("Profile data not found");
   }
 
-  const data = await decryptProfilePayload<ProfileDataPayload>(pinHash, encrypted);
+  let data: ProfileDataPayload;
+  try {
+    data = await decryptProfilePayload<ProfileDataPayload>(meta.id, pin, encrypted);
+  } catch {
+    // Backwards compatibility: old installs encrypted with a fixed env key.
+    data = await decryptProfilePayloadLegacy<ProfileDataPayload>(encrypted);
+    // Immediately re-encrypt with PIN-based encryption.
+    const upgradedEncrypted = await encryptProfilePayload(meta.id, pin, data);
+    await kvSet(key, upgradedEncrypted);
+    scheduleAutoSync();
+  }
   if (!data || data.version !== 1) {
     throw new Error("Unsupported profile data version");
   }
@@ -362,6 +488,8 @@ export async function loginProfile(profileId: ProfileId, pin: string): Promise<P
   activeProfile = {
     meta,
     pinHash,
+    pinHashVersion,
+    pin,
     data,
   };
 
@@ -424,10 +552,9 @@ export async function createAdditionalProfile(
   pin: string,
 ): Promise<ProfileSummary> {
   const trimmedName = name.trim() || "Profile";
-  const pinHash = await hashPin(pin);
-
   const index = readProfilesIndex();
   const id = generateProfileId();
+  const pinHash = await hashPinForProfile(id, pin);
   const now = nowIso();
 
   const meta: ProfileSummary = {
@@ -439,9 +566,10 @@ export async function createAdditionalProfile(
 
   const data = createEmptyProfileData();
   const payload: ProfileDataPayload = data;
-  const encrypted: EncryptedPayload = await encryptProfilePayload(pinHash, payload);
+  const encrypted: EncryptedPayload = await encryptProfilePayload(id, pin, payload);
   const key = buildProfileDataKey(id);
-  writeJson(key, encrypted);
+  await kvSet(key, encrypted);
+  scheduleAutoSync();
 
   const profiles = [...index.profiles, meta];
 
@@ -451,14 +579,10 @@ export async function createAdditionalProfile(
   });
 
   const pinIndex = readProfilePinIndex();
-  pinIndex[id] = pinHash;
+  pinIndex[id] = { v: 2, hash: pinHash };
   writeProfilePinIndex(pinIndex);
 
-  activeProfile = {
-    meta,
-    pinHash,
-    data,
-  };
+  activeProfile = { meta, pinHash, pinHashVersion: 2, pin, data };
 
   return meta;
 }
@@ -475,7 +599,10 @@ export async function verifyActiveProfilePin(pin: string): Promise<boolean> {
   if (!activeProfile) {
     throw new Error("No active profile session");
   }
-  const candidateHash = await hashPin(pin);
+  const candidateHash =
+    activeProfile.pinHashVersion === 1
+      ? await hashPinLegacy(pin)
+      : await hashPinForProfile(activeProfile.meta.id, pin);
   return candidateHash === activeProfile.pinHash;
 }
 
@@ -501,18 +628,20 @@ export async function changeActiveProfilePin(
   if (!activeProfile) {
     throw new Error("No active profile session");
   }
-  if (!activeProfile) {
-    throw new Error("No active profile session");
-  }
-  const currentHash = await hashPin(currentPin);
+  const currentHash =
+    activeProfile.pinHashVersion === 1
+      ? await hashPinLegacy(currentPin)
+      : await hashPinForProfile(activeProfile.meta.id, currentPin);
   if (currentHash !== activeProfile.pinHash) {
     throw new Error("Invalid current PIN");
   }
-  const newHash = await hashPin(newPin);
+  const newHash = await hashPinForProfile(activeProfile.meta.id, newPin);
+  activeProfile.pin = newPin;
+  activeProfile.pinHashVersion = 2;
   activeProfile.pinHash = newHash;
 
   const pinIndex = readProfilePinIndex();
-  pinIndex[activeProfile.meta.id] = newHash;
+  pinIndex[activeProfile.meta.id] = { v: 2, hash: newHash };
   writeProfilePinIndex(pinIndex);
 
   void persistActiveProfile();
@@ -526,7 +655,12 @@ export function deleteActiveProfile(): void {
   const idToDelete = activeProfile.meta.id;
 
   const key = buildProfileDataKey(idToDelete);
-  removeKey(key);
+  void kvDel(key);
+  scheduleAutoSync();
+
+  const pinIndex = readProfilePinIndex();
+  delete pinIndex[idToDelete];
+  writeProfilePinIndex(pinIndex);
 
   const remainingProfiles = index.profiles.filter((p) => p.id !== idToDelete);
   const nextCurrentId = remainingProfiles.length > 0 ? remainingProfiles[0].id : null;
