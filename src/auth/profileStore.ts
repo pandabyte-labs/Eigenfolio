@@ -1,7 +1,7 @@
 import type { AppConfig, Transaction } from "../domain/types";
 import { DEFAULT_HOLDING_PERIOD_DAYS, DEFAULT_UPCOMING_WINDOW_DAYS } from "../domain/config";
-import { CURRENT_CSV_SCHEMA_VERSION, CSV_SCHEMA_VERSION_COLUMN } from "../data/csvSchema";
 import type { EncryptedPayload } from "../crypto/cryptoService";
+import { decryptJsonWithPassphrase } from "../crypto/cryptoService";
 import { hashPin, encryptProfilePayload, decryptProfilePayload } from "./profileSecurity";
 import { getDb, markDbDirty } from "../storage/dbStore";
 import type { ProfileId, ProfileOverview, ProfileSummary, ProfilesIndex } from "./profileTypes";
@@ -31,79 +31,19 @@ const LEGACY_TRANSACTIONS_KEY = "traeky:transactions";
 const LEGACY_NEXT_ID_KEY = "traeky:next-tx-id";
 const LEGACY_CONFIG_KEY = "traeky:app-config";
 
+function getLegacyEncryptionKey(): string | null {
+  const env = import.meta.env as Record<string, unknown>;
+  const key =
+    (env.VITE_PROFILE_ENCRYPTION_KEY as string | undefined) ??
+    (env.TRAEKY_PROFILE_ENCRYPTION_KEY as string | undefined);
+  return key && key.length > 0 ? key : null;
+}
+
+
 let activeProfile: ActiveProfileSession | null = null;
 
 function nowIso(): string {
   return new Date().toISOString();
-}
-
-function escapeCsvCell(value: string): string {
-  return `"${value.replace(/"/g, '""').replace(/\r?\n/g, " ")}"`;
-}
-
-function downloadLegacyCsvBackup(profileName: string, transactions: Transaction[], config: AppConfig): void {
-  if (typeof document === "undefined" || typeof window === "undefined") {
-    return;
-  }
-  if (!transactions || transactions.length === 0) {
-    return;
-  }
-
-  const headers = [
-    "asset_symbol",
-    "tx_type",
-    "amount",
-    "timestamp",
-    "price_fiat",
-    "fiat_currency",
-    "fiat_value",
-    "value_eur",
-    "value_usd",
-    "source",
-    "note",
-    "tx_id",
-    "linked_tx_prev_id",
-    "linked_tx_next_id",
-    CSV_SCHEMA_VERSION_COLUMN,
-    "holding_period_days",
-    "base_currency",
-  ];
-
-  const rows = transactions.map((tx) => [
-    tx.asset_symbol ?? "",
-    tx.tx_type ?? "",
-    tx.amount != null ? String(tx.amount) : "",
-    tx.timestamp ?? "",
-    tx.price_fiat != null ? String(tx.price_fiat) : "",
-    tx.fiat_currency ?? "",
-    tx.fiat_value != null ? String(tx.fiat_value) : "",
-    tx.value_eur != null ? String(tx.value_eur) : "",
-    tx.value_usd != null ? String(tx.value_usd) : "",
-    tx.source ?? "",
-    tx.note ?? "",
-    tx.tx_id ?? "",
-    tx.linked_tx_prev_id != null ? String(tx.linked_tx_prev_id) : "",
-    tx.linked_tx_next_id != null ? String(tx.linked_tx_next_id) : "",
-    String(CURRENT_CSV_SCHEMA_VERSION),
-    String(config.holding_period_days ?? DEFAULT_HOLDING_PERIOD_DAYS),
-    config.base_currency ?? "EUR",
-  ]);
-
-  const csv = [headers.join(","), ...rows.map((r) => r.map(escapeCsvCell).join(","))].join("\n");
-  const profilePart = (profileName.trim() || "profile").replace(/[^a-z0-9_-]+/gi, "_") || "profile";
-  const stamp = new Date().toISOString().slice(0, 10);
-  const filename = `Traeky_LegacyBackup_${profilePart}_${stamp}.csv`;
-
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.rel = "noopener";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  window.URL.revokeObjectURL(url);
 }
 
 function generateProfileId(): ProfileId {
@@ -229,6 +169,11 @@ function readLegacyConfig(): AppConfig | null {
   };
 }
 
+function removeLegacyStorage(): void {
+  // Intentionally no-op.
+  // We never delete legacy localStorage keys automatically, to avoid accidental data loss.
+}
+
 function profileHasLegacyData(): boolean {
   const storage = getLegacyStorage();
   if (!storage) return false;
@@ -303,23 +248,13 @@ export async function createInitialProfile(name: string, pin: string): Promise<P
         ? transactions.reduce((acc, tx) => (tx.id && tx.id > acc ? tx.id : acc), 0) + 1
         : 1);
     const config = readLegacyConfig() ?? createDefaultConfig();
-
-    // Safety backup: before touching legacy localStorage keys, trigger a CSV export
-    // (this runs under a user gesture, so browsers are more likely to allow it).
-    try {
-      downloadLegacyCsvBackup(trimmedName, transactions, config);
-    } catch {
-      // ignore
-    }
-
     data = {
       version: 2,
       transactions,
       nextTransactionId: nextId,
       config,
     };
-    // IMPORTANT: do not delete legacy localStorage automatically.
-    // Keeping it avoids data loss if a user never syncs their DB file.
+    removeLegacyStorage();
   } else {
     data = createEmptyProfileData();
   }
@@ -346,7 +281,18 @@ export async function loginProfile(profileId: ProfileId, pin: string): Promise<P
     throw new Error("Profile data not found");
   }
 
-  const data = await decryptProfilePayload<ProfileDataPayload>(pinHash, encrypted);
+  let data: ProfileDataPayload;
+  try {
+    data = await decryptProfilePayload<ProfileDataPayload>(pinHash, encrypted);
+  } catch (err) {
+    // Legacy compatibility: older builds encrypted profile payloads with a global app key.
+    // If present, decrypt with that key and immediately re-encrypt with the user's PIN-derived key.
+    const legacyKey = getLegacyEncryptionKey();
+    if (!legacyKey) {
+      throw err;
+    }
+    data = await decryptJsonWithPassphrase<ProfileDataPayload>(encrypted, legacyKey);
+  }
   if (!data || (data.version !== 1 && data.version !== 2)) {
     throw new Error("Unsupported profile data version");
   }

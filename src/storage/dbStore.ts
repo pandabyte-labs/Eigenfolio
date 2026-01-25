@@ -1,9 +1,6 @@
 import { idbGet, idbSet } from "./idb";
 import { createEmptyDb, parseDb, serializeDb, type TraekyDb } from "./traekyDb";
-import {
-  downloadPendingLegacyCsvBackups,
-  migrateLegacyLocalStorageIntoDb,
-} from "./legacyLocalStorageMigration";
+import { downloadPendingLegacyCsvBackups, migrateLegacyLocalStorageIntoDb } from "./legacyLocalStorageMigration";
 import type { Language } from "../i18n";
 
 export type DbSyncStatus = {
@@ -155,17 +152,21 @@ export async function initDbAuto(defaultLang: Language): Promise<void> {
   lastSyncedAt = null;
   conflicts = 0;
   notify();
+
   await tryReadBoundHandle();
 
-  // One-time migration from legacy (pre-DB) localStorage. This never deletes localStorage.
-  // If migration succeeds, we mark the DB dirty so the user is prompted to sync.
-  try {
+  // Firefox (and other browsers without File System Access) cannot auto-bind a handle.
+  // In that case, migrate any legacy localStorage-based profiles into the in-memory DB
+  // so users do not perceive data loss.
+  if (db && db.index.profiles.length === 0) {
     const result = await migrateLegacyLocalStorageIntoDb(db);
     if (!result.skipped && result.migratedProfiles > 0) {
-      markDbDirty();
+      isDirty = true;
+      lastSyncedAt = null;
+      fileLabel = null;
+      conflicts = 0;
+      notify();
     }
-  } catch {
-    // Ignore migration failures; do not risk data loss.
   }
 }
 
@@ -242,13 +243,9 @@ export async function syncDbNow(): Promise<void> {
     throw new Error("Database not loaded");
   }
 
-  // If we prepared CSV safety backups during migration, offer them for download
-  // on the next user-triggered sync action (more likely to be allowed by browsers).
-  try {
-    downloadPendingLegacyCsvBackups();
-  } catch {
-    // ignore
-  }
+  // If a migration prepared safety CSV backups, download them before the user saves/syncs a DB file.
+  // This is intentionally user-triggered (manual sync button) to avoid surprise downloads.
+  downloadPendingLegacyCsvBackups();
 
   const content = serializeDb(db);
 
