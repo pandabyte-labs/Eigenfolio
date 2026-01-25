@@ -17,7 +17,6 @@ export type DbSyncStatus = {
 
 type DbListener = () => void;
 
-type FilePickerAccept = Record<string, string[]>;
 type FilePickerType = { description: string; accept: Record<string, string[]> };
 type OpenFilePickerOptions = { types: FilePickerType[]; multiple: boolean };
 type SaveFilePickerOptions = { suggestedName: string; types: FilePickerType[] };
