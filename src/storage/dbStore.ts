@@ -1,7 +1,8 @@
 import { idbGet, idbSet } from "./idb";
 import { createEmptyDb, parseDb, serializeDb, type TraekyDb } from "./traekyDb";
-import { downloadPendingLegacyCsvBackups, migrateLegacyLocalStorageIntoDb } from "./legacyLocalStorageMigration";
 import type { Language } from "../i18n";
+import type { EncryptedPayload } from "../crypto/cryptoService";
+import type { ProfileId, ProfilesIndex } from "../auth/profileTypes";
 
 export type DbSyncStatus = {
   isReady: boolean;
@@ -37,6 +38,11 @@ let fileHandle: FileSystemFileHandle | null = null;
 
 const IDB_HANDLE_KEY = "db:file-handle";
 
+// Legacy localStorage (pre DB-file) keys.
+const LEGACY_LS_PROFILES_INDEX_KEY = "traeky:profiles:index";
+const LEGACY_PROFILE_DATA_PREFIX = "traeky:profile:";
+const LEGACY_PROFILE_DATA_SUFFIX = ":data";
+
 const listeners = new Set<DbListener>();
 
 function notify(): void {
@@ -53,6 +59,104 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function getLegacyLocalStorage(): Storage | null {
+  try {
+    if (typeof window !== "undefined" && window.localStorage) {
+      return window.localStorage;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function buildLegacyProfileDataKey(profileId: ProfileId): string {
+  return `${LEGACY_PROFILE_DATA_PREFIX}${profileId}${LEGACY_PROFILE_DATA_SUFFIX}`;
+}
+
+function isEncryptedPayload(value: unknown): value is EncryptedPayload {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    v.version === 1 &&
+    v.algorithm === "AES-GCM" &&
+    typeof v.salt === "string" &&
+    typeof v.iv === "string" &&
+    typeof v.ciphertext === "string"
+  );
+}
+
+function tryMigrateLegacyLocalStorageIntoDb(): boolean {
+  // Only migrate into an empty DB, and never delete localStorage.
+  if (!db) return false;
+  if (db.index.profiles.length > 0) return false;
+
+  const storage = getLegacyLocalStorage();
+  if (!storage) return false;
+
+  let legacyIndex: ProfilesIndex | null = null;
+  try {
+    const raw = storage.getItem(LEGACY_LS_PROFILES_INDEX_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return false;
+    const obj = parsed as Record<string, unknown>;
+    const profilesRaw = Array.isArray(obj.profiles) ? obj.profiles : [];
+    const profiles = profilesRaw
+      .filter((p): p is Record<string, unknown> => !!p && typeof p === "object")
+      .filter((p) => typeof p.id === "string" && typeof p.name === "string")
+      .map((p) => ({
+        id: String(p.id),
+        name: String(p.name),
+        createdAt: typeof p.createdAt === "string" ? p.createdAt : nowIso(),
+        updatedAt: typeof p.updatedAt === "string" ? p.updatedAt : nowIso(),
+      }));
+
+    const currentProfileId =
+      typeof obj.currentProfileId === "string" ? (obj.currentProfileId as ProfileId) : null;
+
+    legacyIndex = {
+      currentProfileId,
+      profiles,
+    };
+  } catch {
+    return false;
+  }
+
+  if (!legacyIndex || legacyIndex.profiles.length === 0) return false;
+
+  const migratedData: Record<ProfileId, EncryptedPayload> = {};
+  const migratedProfiles = legacyIndex.profiles.filter((p) => {
+    try {
+      const key = buildLegacyProfileDataKey(p.id);
+      const raw = storage.getItem(key);
+      if (!raw) return false;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!isEncryptedPayload(parsed)) return false;
+      migratedData[p.id] = parsed;
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+  if (migratedProfiles.length === 0) return false;
+
+  const normalizedCurrentId =
+    legacyIndex.currentProfileId && migratedData[legacyIndex.currentProfileId]
+      ? legacyIndex.currentProfileId
+      : migratedProfiles[0].id;
+
+  db.index = {
+    currentProfileId: normalizedCurrentId,
+    profiles: migratedProfiles,
+  };
+  db.profileData = { ...db.profileData, ...migratedData };
+  isDirty = true;
+  db.updatedAt = nowIso();
+  db.meta.revision = Math.max(1, (db.meta.revision ?? 0) + 1);
+  return true;
+}
 
 async function readFileAsText(file: File): Promise<string> {
   return await file.text();
@@ -151,23 +255,11 @@ export async function initDbAuto(defaultLang: Language): Promise<void> {
   fileLabel = null;
   lastSyncedAt = null;
   conflicts = 0;
+  // Best-effort, non-destructive migration from the legacy localStorage format.
+  // This needs to run BEFORE the first notify so the UI sees existing profiles.
+  tryMigrateLegacyLocalStorageIntoDb();
   notify();
-
   await tryReadBoundHandle();
-
-  // Firefox (and other browsers without File System Access) cannot auto-bind a handle.
-  // In that case, migrate any legacy localStorage-based profiles into the in-memory DB
-  // so users do not perceive data loss.
-  if (db && db.index.profiles.length === 0) {
-    const result = await migrateLegacyLocalStorageIntoDb(db);
-    if (!result.skipped && result.migratedProfiles > 0) {
-      isDirty = true;
-      lastSyncedAt = null;
-      fileLabel = null;
-      conflicts = 0;
-      notify();
-    }
-  }
 }
 
 async function pickFileWithFallback(accept: string): Promise<File | null> {
@@ -242,11 +334,6 @@ export async function syncDbNow(): Promise<void> {
   if (!db) {
     throw new Error("Database not loaded");
   }
-
-  // If a migration prepared safety CSV backups, download them before the user saves/syncs a DB file.
-  // This is intentionally user-triggered (manual sync button) to avoid surprise downloads.
-  downloadPendingLegacyCsvBackups();
-
   const content = serializeDb(db);
 
   if (supportsFileSystemAccess() && fileHandle) {
