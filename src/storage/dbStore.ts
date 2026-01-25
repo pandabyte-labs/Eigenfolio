@@ -1,5 +1,9 @@
 import { idbGet, idbSet } from "./idb";
 import { createEmptyDb, parseDb, serializeDb, type TraekyDb } from "./traekyDb";
+import {
+  downloadPendingLegacyCsvBackups,
+  migrateLegacyLocalStorageIntoDb,
+} from "./legacyLocalStorageMigration";
 import type { Language } from "../i18n";
 
 export type DbSyncStatus = {
@@ -152,6 +156,17 @@ export async function initDbAuto(defaultLang: Language): Promise<void> {
   conflicts = 0;
   notify();
   await tryReadBoundHandle();
+
+  // One-time migration from legacy (pre-DB) localStorage. This never deletes localStorage.
+  // If migration succeeds, we mark the DB dirty so the user is prompted to sync.
+  try {
+    const result = await migrateLegacyLocalStorageIntoDb(db);
+    if (!result.skipped && result.migratedProfiles > 0) {
+      markDbDirty();
+    }
+  } catch {
+    // Ignore migration failures; do not risk data loss.
+  }
 }
 
 async function pickFileWithFallback(accept: string): Promise<File | null> {
@@ -226,6 +241,15 @@ export async function syncDbNow(): Promise<void> {
   if (!db) {
     throw new Error("Database not loaded");
   }
+
+  // If we prepared CSV safety backups during migration, offer them for download
+  // on the next user-triggered sync action (more likely to be allowed by browsers).
+  try {
+    downloadPendingLegacyCsvBackups();
+  } catch {
+    // ignore
+  }
+
   const content = serializeDb(db);
 
   if (supportsFileSystemAccess() && fileHandle) {

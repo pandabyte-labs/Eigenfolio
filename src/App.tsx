@@ -352,7 +352,7 @@ const App: React.FC = () => {
       setLoginProfileId(overview.profiles[0].id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dbSyncStatus.isReady, defaultLang]);
+  }, [dbSyncStatus.isReady, dbSyncStatus.isDirty, dbSyncStatus.lastSyncedAt, dbSyncStatus.fileLabel, defaultLang]);
 
   useEffect(() => {
     // Persist UI language into the DB file.
