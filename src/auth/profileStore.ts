@@ -1,35 +1,22 @@
-
 import type { AppConfig, Transaction } from "../domain/types";
 import { DEFAULT_HOLDING_PERIOD_DAYS, DEFAULT_UPCOMING_WINDOW_DAYS } from "../domain/config";
 import type { EncryptedPayload } from "../crypto/cryptoService";
 import { hashPin, encryptProfilePayload, decryptProfilePayload } from "./profileSecurity";
+import { getDb, markDbDirty } from "../storage/dbStore";
+import type { ProfileId, ProfileOverview, ProfileSummary, ProfilesIndex } from "./profileTypes";
 
-export type ProfileId = string;
+export type { ProfileId, ProfileOverview, ProfileSummary };
 
-export type ProfileSummary = {
-  id: ProfileId;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type ProfileOverview = {
-  profiles: ProfileSummary[];
-  hasLegacyData: boolean;
-};
-
-type ProfileDataPayloadVersion = 1;
+type ProfileDataPayloadVersion = 2;
 
 type ProfileDataPayload = {
   version: ProfileDataPayloadVersion;
   transactions: Transaction[];
   nextTransactionId: number;
   config: AppConfig;
-};
-
-type ProfilesIndex = {
-  currentProfileId: ProfileId | null;
-  profiles: ProfileSummary[];
+  // Optional, encrypted along with the profile payload.
+  priceCache?: Record<string, { eur?: number; usd?: number; fetched_at: number }>;
+  historicalPriceCache?: Record<string, { eur?: number; usd?: number; fetched_at: number }>;
 };
 
 type ActiveProfileSession = {
@@ -38,76 +25,11 @@ type ActiveProfileSession = {
   data: ProfileDataPayload;
 };
 
-const LS_PROFILES_INDEX_KEY = "traeky:profiles:index";
-const PROFILE_DATA_PREFIX = "traeky:profile:";
-const PROFILE_DATA_SUFFIX = ":data";
-
 const LEGACY_TRANSACTIONS_KEY = "traeky:transactions";
 const LEGACY_NEXT_ID_KEY = "traeky:next-tx-id";
 const LEGACY_CONFIG_KEY = "traeky:app-config";
-const PROFILE_PIN_INDEX_KEY = "traeky:profiles-pin-index";
-
-type ProfilePinIndex = {
-  [profileId: string]: string;
-};
-
-function readProfilePinIndex(): ProfilePinIndex {
-  const value = readJson<ProfilePinIndex | null>(PROFILE_PIN_INDEX_KEY);
-  if (!value || typeof value !== "object") {
-    return {};
-  }
-  return value;
-}
-
-function writeProfilePinIndex(index: ProfilePinIndex): void {
-  writeJson(PROFILE_PIN_INDEX_KEY, index);
-}
-
 
 let activeProfile: ActiveProfileSession | null = null;
-
-function getStorage(): Storage | null {
-  try {
-    if (typeof window !== "undefined" && window.localStorage) {
-      return window.localStorage;
-    }
-  } catch {
-    // Ignore and fall back to null.
-  }
-  return null;
-}
-
-function readJson<T>(key: string): T | null {
-  const storage = getStorage();
-  if (!storage) return null;
-  try {
-    const raw = storage.getItem(key);
-    if (!raw) return null;
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
-function writeJson(key: string, value: unknown): void {
-  const storage = getStorage();
-  if (!storage) return;
-  try {
-    storage.setItem(key, JSON.stringify(value));
-  } catch {
-    // Ignore persistence errors.
-  }
-}
-
-function removeKey(key: string): void {
-  const storage = getStorage();
-  if (!storage) return;
-  try {
-    storage.removeItem(key);
-  } catch {
-    // Ignore persistence errors.
-  }
-}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -118,30 +40,6 @@ function generateProfileId(): ProfileId {
     return crypto.randomUUID();
   }
   return `profile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function readProfilesIndex(): ProfilesIndex {
-  const idx = readJson<ProfilesIndex>(LS_PROFILES_INDEX_KEY);
-  if (!idx || !Array.isArray(idx.profiles)) {
-    return { currentProfileId: null, profiles: [] };
-  }
-  return {
-    currentProfileId: idx.currentProfileId ?? null,
-    profiles: idx.profiles.map((p) => ({
-      id: p.id,
-      name: p.name,
-      createdAt: p.createdAt,
-      updatedAt: p.updatedAt,
-    })),
-  };
-}
-
-function writeProfilesIndex(index: ProfilesIndex): void {
-  writeJson(LS_PROFILES_INDEX_KEY, index);
-}
-
-function buildProfileDataKey(profileId: ProfileId): string {
-  return `${PROFILE_DATA_PREFIX}${profileId}${PROFILE_DATA_SUFFIX}`;
 }
 
 function createDefaultConfig(): AppConfig {
@@ -156,21 +54,72 @@ function createDefaultConfig(): AppConfig {
 
 function createEmptyProfileData(): ProfileDataPayload {
   return {
-    version: 1,
+    version: 2,
     transactions: [],
     nextTransactionId: 1,
     config: createDefaultConfig(),
   };
 }
 
+function getProfilesIndex(): ProfilesIndex {
+  const db = getDb();
+  return db.index;
+}
+
+function setProfilesIndex(index: ProfilesIndex): void {
+  const db = getDb();
+  db.index = index;
+  markDbDirty();
+}
+
+function getEncryptedProfileData(profileId: ProfileId): EncryptedPayload | null {
+  const db = getDb();
+  return (db.profileData?.[profileId] as EncryptedPayload | undefined) ?? null;
+}
+
+function setEncryptedProfileData(profileId: ProfileId, encrypted: EncryptedPayload): void {
+  const db = getDb();
+  db.profileData[profileId] = encrypted;
+  markDbDirty();
+}
+
+function removeEncryptedProfileData(profileId: ProfileId): void {
+  const db = getDb();
+  delete db.profileData[profileId];
+  markDbDirty();
+}
+
+function getLegacyStorage(): Storage | null {
+  try {
+    if (typeof window !== "undefined" && window.localStorage) {
+      return window.localStorage;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+function readLegacyJson<T>(key: string): T | null {
+  const storage = getLegacyStorage();
+  if (!storage) return null;
+  try {
+    const raw = storage.getItem(key);
+    if (!raw) return null;
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
 function readLegacyTransactions(): Transaction[] {
-  const items = readJson<Transaction[]>(LEGACY_TRANSACTIONS_KEY);
+  const items = readLegacyJson<Transaction[]>(LEGACY_TRANSACTIONS_KEY);
   if (!items || !Array.isArray(items)) return [];
   return items;
 }
 
 function readLegacyNextId(): number | null {
-  const storage = getStorage();
+  const storage = getLegacyStorage();
   if (!storage) return null;
   try {
     const raw = storage.getItem(LEGACY_NEXT_ID_KEY);
@@ -184,7 +133,7 @@ function readLegacyNextId(): number | null {
 }
 
 function readLegacyConfig(): AppConfig | null {
-  const cfg = readJson<AppConfig>(LEGACY_CONFIG_KEY);
+  const cfg = readLegacyJson<AppConfig>(LEGACY_CONFIG_KEY);
   if (!cfg || typeof cfg !== "object") return null;
   const baseCurrency = cfg.base_currency === "USD" ? "USD" : "EUR";
   const holding =
@@ -198,8 +147,7 @@ function readLegacyConfig(): AppConfig | null {
       : DEFAULT_UPCOMING_WINDOW_DAYS;
   const priceFetchEnabled =
     typeof cfg.price_fetch_enabled === "boolean" ? cfg.price_fetch_enabled : true;
-  const coingeckoApiKey =
-    typeof cfg.coingecko_api_key === "string" ? cfg.coingecko_api_key : null;
+  const coingeckoApiKey = typeof cfg.coingecko_api_key === "string" ? cfg.coingecko_api_key : null;
 
   return {
     holding_period_days: holding,
@@ -211,13 +159,19 @@ function readLegacyConfig(): AppConfig | null {
 }
 
 function removeLegacyStorage(): void {
-  removeKey(LEGACY_TRANSACTIONS_KEY);
-  removeKey(LEGACY_NEXT_ID_KEY);
-  removeKey(LEGACY_CONFIG_KEY);
+  const storage = getLegacyStorage();
+  if (!storage) return;
+  try {
+    storage.removeItem(LEGACY_TRANSACTIONS_KEY);
+    storage.removeItem(LEGACY_NEXT_ID_KEY);
+    storage.removeItem(LEGACY_CONFIG_KEY);
+  } catch {
+    // ignore
+  }
 }
 
 function profileHasLegacyData(): boolean {
-  const storage = getStorage();
+  const storage = getLegacyStorage();
   if (!storage) return false;
   try {
     return (
@@ -231,7 +185,7 @@ function profileHasLegacyData(): boolean {
 }
 
 export function getProfileOverview(): ProfileOverview {
-  const index = readProfilesIndex();
+  const index = getProfilesIndex();
   return {
     profiles: index.profiles,
     hasLegacyData: profileHasLegacyData(),
@@ -239,34 +193,29 @@ export function getProfileOverview(): ProfileOverview {
 }
 
 export function getActiveProfileSummary(): ProfileSummary | null {
-  if (!activeProfile) return null;
-  return activeProfile.meta;
+  return activeProfile?.meta ?? null;
 }
 
 export function hasActiveProfileSession(): boolean {
   return !!activeProfile;
 }
+
 export function logoutActiveProfileSession(): void {
   activeProfile = null;
 }
 
-
-
 async function persistActiveProfile(): Promise<void> {
   if (!activeProfile) return;
   const payload: ProfileDataPayload = activeProfile.data;
-  const encrypted: EncryptedPayload = await encryptProfilePayload(
-    activeProfile.pinHash,
-    payload,
-  );
-  const key = buildProfileDataKey(activeProfile.meta.id);
-  writeJson(key, encrypted);
-  const index = readProfilesIndex();
+  const encrypted: EncryptedPayload = await encryptProfilePayload(activeProfile.pinHash, payload);
+  setEncryptedProfileData(activeProfile.meta.id, encrypted);
+
+  const index = getProfilesIndex();
   const now = nowIso();
   const updatedProfiles = index.profiles.map((p) =>
     p.id === activeProfile!.meta.id ? { ...p, updatedAt: now, name: activeProfile!.meta.name } : p,
   );
-  writeProfilesIndex({
+  setProfilesIndex({
     currentProfileId: activeProfile.meta.id,
     profiles: updatedProfiles,
   });
@@ -276,7 +225,7 @@ export async function createInitialProfile(name: string, pin: string): Promise<P
   const trimmedName = name.trim() || "Default";
   const pinHash = await hashPin(pin);
 
-  const index = readProfilesIndex();
+  const index = getProfilesIndex();
   const id = generateProfileId();
   const now = nowIso();
   const meta: ProfileSummary = {
@@ -287,8 +236,7 @@ export async function createInitialProfile(name: string, pin: string): Promise<P
   };
 
   let data: ProfileDataPayload;
-
-  if (profileHasLegacyData()) {
+  if (profileHasLegacyData() && index.profiles.length === 0) {
     const transactions = readLegacyTransactions();
     const nextId =
       readLegacyNextId() ??
@@ -297,7 +245,7 @@ export async function createInitialProfile(name: string, pin: string): Promise<P
         : 1);
     const config = readLegacyConfig() ?? createDefaultConfig();
     data = {
-      version: 1,
+      version: 2,
       transactions,
       nextTransactionId: nextId,
       config,
@@ -307,76 +255,60 @@ export async function createInitialProfile(name: string, pin: string): Promise<P
     data = createEmptyProfileData();
   }
 
-  activeProfile = {
-    meta,
-    pinHash,
-    data,
-  };
-
-  const profiles = [...index.profiles, meta];
-  writeProfilesIndex({
+  activeProfile = { meta, pinHash, data };
+  setProfilesIndex({
     currentProfileId: id,
-    profiles,
+    profiles: [...index.profiles, meta],
   });
 
-  const pinIndex = readProfilePinIndex();
-  pinIndex[id] = pinHash;
-  writeProfilePinIndex(pinIndex);
-
   await persistActiveProfile();
-
   return meta;
 }
 
 export async function loginProfile(profileId: ProfileId, pin: string): Promise<ProfileSummary> {
-  const index = readProfilesIndex();
-  if (index.profiles.length === 0) {
+  const index = getProfilesIndex();
+  const meta = index.profiles.find((p) => p.id === profileId) ?? null;
+  if (!meta) {
     throw new Error("Profile not found");
   }
-
-  const pinIndex = readProfilePinIndex();
   const pinHash = await hashPin(pin);
-
-  let meta: ProfileSummary | null =
-    index.profiles.find((p) => p.id === profileId && pinIndex[p.id] === pinHash) ?? null;
-
-  if (!meta) {
-    meta = index.profiles.find((p) => pinIndex[p.id] === pinHash) ?? null;
-  }
-
-  if (!meta) {
-    throw new Error("Invalid PIN");
-  }
-
-  const key = buildProfileDataKey(meta.id);
-  const encrypted = readJson<EncryptedPayload>(key);
+  const encrypted = getEncryptedProfileData(meta.id);
   if (!encrypted) {
     throw new Error("Profile data not found");
   }
 
   const data = await decryptProfilePayload<ProfileDataPayload>(pinHash, encrypted);
-  if (!data || data.version !== 1) {
+  if (!data || (data.version !== 1 && data.version !== 2)) {
     throw new Error("Unsupported profile data version");
   }
 
-  activeProfile = {
-    meta,
-    pinHash,
-    data,
-  };
+  // Upgrade legacy payloads to v2 in memory.
+  const normalized: ProfileDataPayload =
+    data.version === 2
+      ? data
+      : {
+          version: 2,
+          transactions: (data as any).transactions ?? [],
+          nextTransactionId: (data as any).nextTransactionId ?? 1,
+          config: (data as any).config ?? createDefaultConfig(),
+        };
+
+  activeProfile = { meta, pinHash, data: normalized };
 
   const now = nowIso();
   const updatedMeta: ProfileSummary = { ...meta, updatedAt: now };
-  const updatedProfiles = index.profiles.map((p) => (p.id === meta!.id ? updatedMeta : p));
-  writeProfilesIndex({
+  const updatedProfiles = index.profiles.map((p) => (p.id === meta.id ? updatedMeta : p));
+  setProfilesIndex({
     currentProfileId: meta.id,
     profiles: updatedProfiles,
   });
   activeProfile.meta = updatedMeta;
 
+  // Persist immediately to ensure v1 payloads are re-encrypted with the PIN.
+  await persistActiveProfile();
+
   return updatedMeta;
 }
-
 
 export function getActiveProfileConfig(): AppConfig {
   if (!activeProfile) {
@@ -418,15 +350,43 @@ export function getNextActiveProfileTxId(): number {
   return id;
 }
 
+export function getActiveProfilePriceCache(): ProfileDataPayload["priceCache"] {
+  if (!activeProfile) {
+    throw new Error("No active profile session");
+  }
+  return activeProfile.data.priceCache;
+}
 
-export async function createAdditionalProfile(
-  name: string,
-  pin: string,
-): Promise<ProfileSummary> {
+export function setActiveProfilePriceCache(cache: ProfileDataPayload["priceCache"]): void {
+  if (!activeProfile) {
+    throw new Error("No active profile session");
+  }
+  activeProfile.data.priceCache = cache;
+  void persistActiveProfile();
+}
+
+export function getActiveProfileHistoricalPriceCache(): ProfileDataPayload["historicalPriceCache"] {
+  if (!activeProfile) {
+    throw new Error("No active profile session");
+  }
+  return activeProfile.data.historicalPriceCache;
+}
+
+export function setActiveProfileHistoricalPriceCache(
+  cache: ProfileDataPayload["historicalPriceCache"],
+): void {
+  if (!activeProfile) {
+    throw new Error("No active profile session");
+  }
+  activeProfile.data.historicalPriceCache = cache;
+  void persistActiveProfile();
+}
+
+export async function createAdditionalProfile(name: string, pin: string): Promise<ProfileSummary> {
   const trimmedName = name.trim() || "Profile";
   const pinHash = await hashPin(pin);
 
-  const index = readProfilesIndex();
+  const index = getProfilesIndex();
   const id = generateProfileId();
   const now = nowIso();
 
@@ -438,28 +398,15 @@ export async function createAdditionalProfile(
   };
 
   const data = createEmptyProfileData();
-  const payload: ProfileDataPayload = data;
-  const encrypted: EncryptedPayload = await encryptProfilePayload(pinHash, payload);
-  const key = buildProfileDataKey(id);
-  writeJson(key, encrypted);
+  const encrypted: EncryptedPayload = await encryptProfilePayload(pinHash, data);
+  setEncryptedProfileData(id, encrypted);
 
-  const profiles = [...index.profiles, meta];
-
-  writeProfilesIndex({
+  setProfilesIndex({
     currentProfileId: id,
-    profiles,
+    profiles: [...index.profiles, meta],
   });
 
-  const pinIndex = readProfilePinIndex();
-  pinIndex[id] = pinHash;
-  writeProfilePinIndex(pinIndex);
-
-  activeProfile = {
-    meta,
-    pinHash,
-    data,
-  };
-
+  activeProfile = { meta, pinHash, data };
   return meta;
 }
 
@@ -494,13 +441,7 @@ export function renameActiveProfile(name: string): void {
   void persistActiveProfile();
 }
 
-export async function changeActiveProfilePin(
-  currentPin: string,
-  newPin: string,
-): Promise<void> {
-  if (!activeProfile) {
-    throw new Error("No active profile session");
-  }
+export async function changeActiveProfilePin(currentPin: string, newPin: string): Promise<void> {
   if (!activeProfile) {
     throw new Error("No active profile session");
   }
@@ -510,28 +451,22 @@ export async function changeActiveProfilePin(
   }
   const newHash = await hashPin(newPin);
   activeProfile.pinHash = newHash;
-
-  const pinIndex = readProfilePinIndex();
-  pinIndex[activeProfile.meta.id] = newHash;
-  writeProfilePinIndex(pinIndex);
-
-  void persistActiveProfile();
+  await persistActiveProfile();
 }
 
 export function deleteActiveProfile(): void {
   if (!activeProfile) {
     throw new Error("No active profile session");
   }
-  const index = readProfilesIndex();
+  const index = getProfilesIndex();
   const idToDelete = activeProfile.meta.id;
 
-  const key = buildProfileDataKey(idToDelete);
-  removeKey(key);
+  removeEncryptedProfileData(idToDelete);
 
   const remainingProfiles = index.profiles.filter((p) => p.id !== idToDelete);
   const nextCurrentId = remainingProfiles.length > 0 ? remainingProfiles[0].id : null;
 
-  writeProfilesIndex({
+  setProfilesIndex({
     currentProfileId: nextCurrentId,
     profiles: remainingProfiles,
   });

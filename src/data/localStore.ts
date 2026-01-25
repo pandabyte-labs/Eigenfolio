@@ -7,24 +7,14 @@
  */
 export type DataSourceMode = "local-only";
 
-const STORAGE_KEY = "traeky:data-source-mode";
+// NOTE: This build operates purely in local-only mode.
+// Persistence is handled via the Traeky DB file (manual sync),
+// so we do not store any mode selection in localStorage.
 
 export function getPreferredMode(): DataSourceMode {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw === "local-only") {
-      return "local-only";
-    }
-  } catch {
-    // Ignore storage errors and fall back to local-only.
-  }
   return "local-only";
 }
 
 export function setPreferredMode(_mode: DataSourceMode): void {
-  try {
-    window.localStorage.setItem(STORAGE_KEY, "local-only");
-  } catch {
-    // Ignore persistence errors; mode will simply not be remembered.
-  }
+  // Intentionally no-op.
 }

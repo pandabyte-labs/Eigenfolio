@@ -14,6 +14,10 @@ import {
   changeActiveProfilePin,
   deleteActiveProfile,
   getActiveProfileSummary,
+  getActiveProfilePriceCache,
+  setActiveProfilePriceCache,
+  getActiveProfileHistoricalPriceCache,
+  setActiveProfileHistoricalPriceCache,
   logoutActiveProfileSession,
 } from "./auth/profileStore";
 import { t, Language, getDefaultLanguage } from "./i18n";
@@ -21,15 +25,23 @@ import { CURRENT_CSV_SCHEMA_VERSION, CSV_SCHEMA_VERSION_COLUMN } from "./data/cs
 import { Transaction, HoldingsItem, HoldingsResponse, CsvImportResult, AppConfig, ExpiringHolding } from "./domain/types";
 import { DEFAULT_HOLDING_PERIOD_DAYS, DEFAULT_UPCOMING_WINDOW_DAYS } from "./domain/config";
 import { getAssetMetadata, getTxExplorerUrl } from "./domain/assets";
-import { applyPricesToHoldings, setCoingeckoApiKey, fetchHistoricalPriceForSymbol, getPriceApiStatus } from "./data/priceService";
+import { applyPricesToHoldings, setCoingeckoApiKey, fetchHistoricalPriceForSymbol, getPriceApiStatus, setPriceCacheProvider } from "./data/priceService";
+import {
+  initDbAuto,
+  subscribeDb,
+  getDbSyncStatus,
+  openDbInteractive,
+  createNewDbInteractive,
+  importDbInteractive,
+  syncDbNow,
+  setUiLanguage,
+  getUiLanguage,
+} from "./storage/dbStore";
 import packageJson from "../package.json";
 
 const RESET_CONFIRMATION_WORD = "RESET";
 
 const APP_VERSION = packageJson.version;
-const LOCAL_STORAGE_LANG_KEY = "traeky_lang";
-
-
 
 function formatTxTypeLabel(txType: string | null | undefined): string {
   const code = (txType || "").toUpperCase();
@@ -170,6 +182,22 @@ const App: React.FC = () => {
     [auth.mode]
   );
 
+  const defaultLang = React.useMemo(() => getDefaultLanguage(), []);
+
+  const [dbSyncStatus, setDbSyncStatus] = useState(() => getDbSyncStatus());
+  useEffect(() => {
+    const unsub = subscribeDb(() => {
+      setDbSyncStatus(getDbSyncStatus());
+    });
+    return () => {
+      unsub();
+    };
+  }, []);
+
+  useEffect(() => {
+    void initDbAuto(defaultLang);
+  }, [defaultLang]);
+
   const [activeProfile, setActiveProfile] = useState<ProfileSummary | null>(null);
   const [profileOverview, setProfileOverview] = useState<ProfileOverview | null>(null);
 
@@ -206,19 +234,7 @@ const App: React.FC = () => {
   const [profileDeleteConfirmInput, setProfileDeleteConfirmInput] = useState("");
   const [profileDeletePinInput, setProfileDeletePinInput] = useState("");
   const [profileDeleteError, setProfileDeleteError] = useState<string | null>(null);
-  const [lang, setLang] = useState<Language>(() => {
-    if (typeof window !== "undefined") {
-      try {
-        const stored = window.localStorage.getItem(LOCAL_STORAGE_LANG_KEY);
-        if (stored === "de" || stored === "en") {
-          return stored as Language;
-        }
-      } catch {
-        // ignore
-      }
-    }
-    return getDefaultLanguage();
-  });
+  const [lang, setLang] = useState<Language>(() => defaultLang);
   const [holdings, setHoldings] = useState<HoldingsItem[]>([]);
   const [holdingsPortfolioEur, setHoldingsPortfolioEur] = useState<number | null>(
     null
@@ -324,23 +340,23 @@ const App: React.FC = () => {
 
   
   useEffect(() => {
+    if (!dbSyncStatus.isReady) {
+      return;
+    }
+    // Load UI settings (language) from the DB file.
+    setLang(getUiLanguage(defaultLang));
+
     const overview = getProfileOverview();
     setProfileOverview(overview);
     if (overview.profiles.length > 0 && !loginProfileId) {
       setLoginProfileId(overview.profiles[0].id);
     }
-    // We intentionally run this only once during initial mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [dbSyncStatus.isReady, defaultLang]);
 
-useEffect(() => {
-    try {
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(LOCAL_STORAGE_LANG_KEY, lang);
-      }
-    } catch {
-      // ignore
-    }
+  useEffect(() => {
+    // Persist UI language into the DB file.
+    setUiLanguage(lang);
   }, [lang]);
 
 
@@ -684,6 +700,23 @@ useEffect(() => {
     }
 
   };
+
+  useEffect(() => {
+    if (!activeProfile) {
+      setPriceCacheProvider(null);
+      return;
+    }
+    setPriceCacheProvider({
+      loadPriceCache: () => getActiveProfilePriceCache() ?? {},
+      savePriceCache: (cache) => setActiveProfilePriceCache(cache),
+      loadHistoricalPriceCache: () => getActiveProfileHistoricalPriceCache() ?? {},
+      saveHistoricalPriceCache: (cache) => setActiveProfileHistoricalPriceCache(cache),
+    });
+    return () => {
+      setPriceCacheProvider(null);
+    };
+  }, [activeProfile?.id]);
+
   useEffect(() => {
     // Optimistically load local transactions and holdings from storage
     // so that something is visible immediately while price/fiat enrichment
@@ -1191,6 +1224,64 @@ const handleReloadHoldingPrices = async () => {
 
   return (
     <div className="layout">
+      {dbSyncStatus.isReady && !dbSyncStatus.fileLabel && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h2>Traeky</h2>
+            <p className="muted">{t(lang, "db_select_description")}</p>
+            <p className="muted" style={{ marginTop: "0.5rem" }}>
+              {t(lang, "db_select_description_firefox")}
+            </p>
+            <div className="modal-actions" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={async () => {
+                  await openDbInteractive();
+                  setLang(getUiLanguage(defaultLang));
+                  const overview = getProfileOverview();
+                  setProfileOverview(overview);
+                  if (overview.profiles.length > 0) {
+                    setLoginProfileId(overview.profiles[0].id);
+                  }
+                }}
+              >
+                {t(lang, "db_open_button")}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={async () => {
+                  await createNewDbInteractive(defaultLang);
+                  setLang(getUiLanguage(defaultLang));
+                  const overview = getProfileOverview();
+                  setProfileOverview(overview);
+                  if (overview.profiles.length > 0) {
+                    setLoginProfileId(overview.profiles[0].id);
+                  }
+                }}
+              >
+                {t(lang, "db_create_button")}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={async () => {
+                  await importDbInteractive();
+                  setLang(getUiLanguage(defaultLang));
+                  const overview = getProfileOverview();
+                  setProfileOverview(overview);
+                  if (overview.profiles.length > 0) {
+                    setLoginProfileId(overview.profiles[0].id);
+                  }
+                }}
+              >
+                {t(lang, "db_import_button")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {profileOverview &&
         (profileOverview.profiles.length === 0 ||
           (profileOverview.profiles.length > 0 && (!activeProfile || isProfileLoginOverlayOpen))) && (
@@ -1398,6 +1489,83 @@ const handleReloadHoldingPrices = async () => {
         </div>
 
         <div className="settings-grid">
+<div className="card settings-card">
+<div className="sidebar-section">
+  <h2>{t(lang, "db_settings_title")}</h2>
+  <p className="muted">{t(lang, "db_settings_description")}</p>
+  <div className="form-row">
+    <label>{t(lang, "db_settings_file_label")}</label>
+    <p className="muted" style={{ margin: 0 }}>
+      {dbSyncStatus.fileLabel ? dbSyncStatus.fileLabel : t(lang, "db_settings_no_file")}
+    </p>
+  </div>
+  <div className="form-row" style={{ marginTop: "0.5rem" }}>
+    <label>{t(lang, "db_settings_sync_status_label")}</label>
+    <p className="muted" style={{ margin: 0 }}>
+      {dbSyncStatus.isDirty ? t(lang, "db_sync_state_dirty") : t(lang, "db_sync_state_clean")}
+      {dbSyncStatus.lastSyncedAt ? ` · ${t(lang, "db_settings_last_sync")} ${new Intl.DateTimeFormat(currentLocale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(dbSyncStatus.lastSyncedAt))}` : ""}
+      {dbSyncStatus.conflicts > 0 ? ` · ${t(lang, "db_settings_conflicts")} ${dbSyncStatus.conflicts}` : ""}
+    </p>
+  </div>
+  <div style={{ marginTop: "0.75rem", display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "center" }}>
+    <button
+      type="button"
+      className="btn-secondary"
+      onClick={async () => {
+        await openDbInteractive();
+        setLang(getUiLanguage(defaultLang));
+        const overview = getProfileOverview();
+        setProfileOverview(overview);
+        if (overview.profiles.length > 0 && !loginProfileId) {
+          setLoginProfileId(overview.profiles[0].id);
+        }
+      }}
+    >
+      {t(lang, "db_open_button")}
+    </button>
+    <button
+      type="button"
+      className="btn-secondary"
+      onClick={async () => {
+        await createNewDbInteractive(defaultLang);
+        setLang(getUiLanguage(defaultLang));
+        const overview = getProfileOverview();
+        setProfileOverview(overview);
+        if (overview.profiles.length > 0 && !loginProfileId) {
+          setLoginProfileId(overview.profiles[0].id);
+        }
+      }}
+    >
+      {t(lang, "db_create_button")}
+    </button>
+    <button
+      type="button"
+      className="btn-secondary"
+      onClick={async () => {
+        await importDbInteractive();
+        setLang(getUiLanguage(defaultLang));
+        const overview = getProfileOverview();
+        setProfileOverview(overview);
+        if (overview.profiles.length > 0 && !loginProfileId) {
+          setLoginProfileId(overview.profiles[0].id);
+        }
+      }}
+    >
+      {t(lang, "db_import_button")}
+    </button>
+    <button
+      type="button"
+      className={dbSyncStatus.isDirty ? "btn-primary" : "btn-secondary"}
+      onClick={async () => {
+        await syncDbNow();
+      }}
+      disabled={!dbSyncStatus.isReady}
+    >
+      {t(lang, "db_sync_button")}
+    </button>
+  </div>
+</div>
+  </div>
 <div className="card settings-card">
 <div className="sidebar-section">
           <h2>{t(lang, "settings_language_title")}</h2>
@@ -1855,6 +2023,27 @@ const handleReloadHoldingPrices = async () => {
                 {t(lang, "header_logout_button")}
               </button>
             )}
+            <button
+              type="button"
+              className={`icon-circle-button ${dbSyncStatus.isDirty ? "sync-dirty" : "sync-clean"}`}
+              onClick={async () => {
+                try {
+                  await syncDbNow();
+                } catch (err) {
+                  console.error("Manual sync failed", err);
+                }
+              }}
+              aria-label={t(lang, "db_sync_button_aria")}
+              title={
+                dbSyncStatus.isDirty
+                  ? t(lang, "db_sync_tooltip_dirty")
+                  : t(lang, "db_sync_tooltip_clean")
+              }
+              disabled={!dbSyncStatus.isReady}
+            >
+              <span aria-hidden="true">⟳</span>
+              <span aria-hidden="true" className="sync-dot" />
+            </button>
             <button
               type="button"
               className="icon-circle-button"

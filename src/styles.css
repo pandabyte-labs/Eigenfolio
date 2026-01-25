@@ -215,6 +215,28 @@ body {
   cursor: pointer;
   padding: 0;
   line-height: 1;
+  position: relative;
+}
+
+.icon-circle-button .sync-dot {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: 0 0 0 1px var(--border-subtle);
+}
+
+.icon-circle-button.sync-dirty .sync-dot {
+  background: #d93025;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.icon-circle-button.sync-clean .sync-dot {
+  background: #1e8e3e;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
 .icon-circle-button:hover {

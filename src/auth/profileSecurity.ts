@@ -1,8 +1,8 @@
 import { encryptJsonWithPassphrase, decryptJsonWithPassphrase, type EncryptedPayload } from "../crypto/cryptoService";
 
 // NOTE:
-//   This avoids subtle issues where changing the PIN or salt would make old data unreadable.
-// - The PIN hash is stored separately in localStorage and compared during login.
+// Profile data is encrypted with a key derived from the profile PIN.
+// We only ever keep/compare the PIN hash in memory during a session.
 
 const rawProfilePinSalt =
   (import.meta.env.VITE_PROFILE_PIN_SALT as string | undefined) ??
@@ -10,15 +10,10 @@ const rawProfilePinSalt =
 
 const PROFILE_PIN_SALT = rawProfilePinSalt ?? "";
 
-const rawProfileEncryptionKey =
-  (import.meta.env.VITE_PROFILE_ENCRYPTION_KEY as string | undefined) ??
-  (import.meta.env.TRAEKY_PROFILE_ENCRYPTION_KEY as string | undefined);
 
-if (!rawProfileEncryptionKey) {
-  throw new Error("Missing profile encryption key in environment");
-}
-
-const PROFILE_ENCRYPTION_KEY = rawProfileEncryptionKey;
+// NOTE:
+// We intentionally do NOT use a global app encryption key.
+// Profile data is encrypted with the respective profile PIN-derived key (pinHash).
 function getWebCrypto(): Crypto {
   if (typeof globalThis !== "undefined" && globalThis.crypto && "subtle" in globalThis.crypto) {
     return globalThis.crypto as Crypto;
@@ -46,11 +41,15 @@ export async function hashPin(pin: string): Promise<string> {
 }
 
 export async function encryptProfilePayload<T>(pinHash: string, payload: T): Promise<EncryptedPayload> {
-  // NOTE: pinHash is intentionally ignored here. We always use a fixed encryption key.
-  return encryptJsonWithPassphrase(payload, PROFILE_ENCRYPTION_KEY);
+  if (!pinHash) {
+    throw new Error("Missing PIN hash");
+  }
+  return encryptJsonWithPassphrase(payload, pinHash);
 }
 
 export async function decryptProfilePayload<T>(pinHash: string, encrypted: EncryptedPayload): Promise<T> {
-  // NOTE: pinHash is intentionally ignored here. We always use a fixed encryption key.
-  return decryptJsonWithPassphrase<T>(encrypted, PROFILE_ENCRYPTION_KEY);
+  if (!pinHash) {
+    throw new Error("Missing PIN hash");
+  }
+  return decryptJsonWithPassphrase<T>(encrypted, pinHash);
 }
