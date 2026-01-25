@@ -7,7 +7,8 @@ import type { ProfileId, ProfileOverview, ProfileSummary, ProfilesIndex } from "
 
 export type { ProfileId, ProfileOverview, ProfileSummary };
 
-type ProfileDataPayloadVersion = 2;
+// Support v1 (legacy) payloads and v2 (current) payloads.
+type ProfileDataPayloadVersion = 1 | 2;
 
 type ProfileDataPayload = {
   version: ProfileDataPayloadVersion;

@@ -202,7 +202,8 @@ async function saveViaHandle(handle: FileSystemFileHandle, content: string): Pro
 }
 
 function saveViaDownload(filename: string, content: string): void {
-  const blob = new Blob([utf8Encode(content)], { type: "application/json" });
+  // Avoid ArrayBufferLike/SharedArrayBuffer typing issues by letting Blob handle UTF-8 encoding.
+  const blob = new Blob([content], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
