@@ -715,7 +715,7 @@ const App: React.FC = () => {
     return () => {
       setPriceCacheProvider(null);
     };
-  }, [activeProfile?.id]);
+  }, [activeProfile]);
 
   useEffect(() => {
     // Optimistically load local transactions and holdings from storage

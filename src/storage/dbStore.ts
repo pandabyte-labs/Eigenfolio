@@ -17,6 +17,15 @@ export type DbSyncStatus = {
 
 type DbListener = () => void;
 
+type FilePickerAccept = Record<string, string[]>;
+type FilePickerType = { description: string; accept: Record<string, string[]> };
+type OpenFilePickerOptions = { types: FilePickerType[]; multiple: boolean };
+type SaveFilePickerOptions = { suggestedName: string; types: FilePickerType[] };
+type WindowWithFsAccess = Window & {
+  showOpenFilePicker?: (options: OpenFilePickerOptions) => Promise<FileSystemFileHandle[]>;
+  showSaveFilePicker?: (options: SaveFilePickerOptions) => Promise<FileSystemFileHandle>;
+};
+
 let db: TraekyDb | null = null;
 let isDirty = false;
 let lastSyncedAt: string | null = null;
@@ -44,16 +53,14 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function utf8Encode(text: string): Uint8Array {
-  return new TextEncoder().encode(text);
-}
 
 async function readFileAsText(file: File): Promise<string> {
   return await file.text();
 }
 
 function supportsFileSystemAccess(): boolean {
-  return typeof (window as any).showOpenFilePicker === "function";
+  const w = window as WindowWithFsAccess;
+  return typeof w.showOpenFilePicker === "function";
 }
 
 function hasBoundHandle(): boolean {
@@ -151,7 +158,8 @@ export async function initDbAuto(defaultLang: Language): Promise<void> {
 async function pickFileWithFallback(accept: string): Promise<File | null> {
   if (supportsFileSystemAccess()) {
     try {
-      const [handle] = await (window as any).showOpenFilePicker({
+      const w = window as WindowWithFsAccess;
+      const [handle] = await w.showOpenFilePicker!({
         types: [{ description: "Traeky DB", accept: { [accept]: [".json", ".db", ".traeky"] } }],
         multiple: false,
       });
@@ -223,9 +231,11 @@ export async function syncDbNow(): Promise<void> {
 
   if (supportsFileSystemAccess() && fileHandle) {
     await saveViaHandle(fileHandle, content);
-  } else if (typeof (window as any).showSaveFilePicker === "function") {
+  } else {
+    const w = window as WindowWithFsAccess;
+    if (typeof w.showSaveFilePicker === "function") {
     // In some Chromium builds, showSaveFilePicker is available even without persisted handles.
-    const handle: FileSystemFileHandle = await (window as any).showSaveFilePicker({
+      const handle: FileSystemFileHandle = await w.showSaveFilePicker({
       suggestedName: fileLabel ?? "traeky-db.json",
       types: [{ description: "Traeky DB", accept: { "application/json": [".json"] } }],
     });
@@ -235,9 +245,10 @@ export async function syncDbNow(): Promise<void> {
     } catch {
       // ignore
     }
-    await saveViaHandle(handle, content);
-  } else {
-    saveViaDownload(fileLabel ?? "traeky-db.json", content);
+      await saveViaHandle(handle, content);
+    } else {
+      saveViaDownload(fileLabel ?? "traeky-db.json", content);
+    }
   }
 
   isDirty = false;

@@ -59,31 +59,38 @@ export function parseDb(jsonText: string): TraekyDb {
   if (!isObject(parsed) || parsed.version !== 1) {
     throw new Error("Unsupported database format");
   }
-  // Minimal structural validation. We keep this permissive for forward compat.
+
+  // Minimal structural validation. Keep this permissive for forward compat.
   const createdAt = typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString();
   const updatedAt = typeof parsed.updatedAt === "string" ? parsed.updatedAt : createdAt;
-  const indexRaw = isObject(parsed.index) ? parsed.index : {};
-  const profilesRaw = Array.isArray((indexRaw as any).profiles) ? (indexRaw as any).profiles : [];
+
+  const indexRaw: Record<string, unknown> = isObject(parsed.index) ? parsed.index : {};
+  const profilesCandidate = indexRaw.profiles;
+  const profilesRaw: unknown[] = Array.isArray(profilesCandidate) ? profilesCandidate : [];
   const profiles = profilesRaw
-    .filter((p: any) => p && typeof p.id === "string" && typeof p.name === "string")
-    .map((p: any) => ({
+    .filter((p): p is Record<string, unknown> => isObject(p) && typeof p.id === "string" && typeof p.name === "string")
+    .map((p) => ({
       id: String(p.id),
       name: String(p.name),
       createdAt: typeof p.createdAt === "string" ? p.createdAt : createdAt,
       updatedAt: typeof p.updatedAt === "string" ? p.updatedAt : updatedAt,
     }));
-  const currentProfileId = typeof (indexRaw as any).currentProfileId === "string" ? (indexRaw as any).currentProfileId : null;
 
-  const profileData = isObject(parsed.profileData) ? (parsed.profileData as Record<string, EncryptedPayload | undefined>) : {};
+  const currentProfileId =
+    typeof indexRaw.currentProfileId === "string" ? (indexRaw.currentProfileId as ProfileId) : null;
 
-  const uiRaw = isObject(parsed.ui) ? parsed.ui : {};
-  const lang = (uiRaw as any).lang === "de" ? "de" : "en";
-  const mode = (uiRaw as any).mode === "local-only" ? "local-only" : "local-only";
+  const profileData = isObject(parsed.profileData)
+    ? (parsed.profileData as Record<string, EncryptedPayload | undefined>)
+    : {};
 
-  const metaRaw = isObject(parsed.meta) ? parsed.meta : {};
-  const revision = typeof (metaRaw as any).revision === "number" && Number.isFinite((metaRaw as any).revision)
-    ? Math.max(1, Math.trunc((metaRaw as any).revision))
-    : 1;
+  const uiRaw: Record<string, unknown> = isObject(parsed.ui) ? parsed.ui : {};
+  const lang = uiRaw.lang === "de" ? "de" : "en";
+  const mode: DataSourceMode = uiRaw.mode === "local-only" ? "local-only" : "local-only";
+
+  const metaRaw: Record<string, unknown> = isObject(parsed.meta) ? parsed.meta : {};
+  const revisionRaw = metaRaw.revision;
+  const revision =
+    typeof revisionRaw === "number" && Number.isFinite(revisionRaw) ? Math.max(1, Math.trunc(revisionRaw)) : 1;
 
   return {
     version: 1,

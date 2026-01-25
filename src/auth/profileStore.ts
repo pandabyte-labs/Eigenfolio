@@ -284,16 +284,29 @@ export async function loginProfile(profileId: ProfileId, pin: string): Promise<P
   }
 
   // Upgrade legacy payloads to v2 in memory.
+  type LegacyProfileDataPayloadV1 = {
+    version: 1;
+    transactions?: Transaction[];
+    nextTransactionId?: number;
+    config?: AppConfig;
+    priceCache?: ProfileDataPayload["priceCache"];
+    historicalPriceCache?: ProfileDataPayload["historicalPriceCache"];
+  };
+
   const normalized: ProfileDataPayload =
     data.version === 2
       ? data
-      : {
-          version: 2,
-          transactions: (data as any).transactions ?? [],
-          nextTransactionId: (data as any).nextTransactionId ?? 1,
-          config: (data as any).config ?? createDefaultConfig(),
-        };
-
+      : (() => {
+          const legacy = data as LegacyProfileDataPayloadV1;
+          return {
+            version: 2,
+            transactions: legacy.transactions ?? [],
+            nextTransactionId: legacy.nextTransactionId ?? 1,
+            config: legacy.config ?? createDefaultConfig(),
+            priceCache: legacy.priceCache,
+            historicalPriceCache: legacy.historicalPriceCache,
+          };
+        })();
   activeProfile = { meta, pinHash, data: normalized };
 
   const now = nowIso();
