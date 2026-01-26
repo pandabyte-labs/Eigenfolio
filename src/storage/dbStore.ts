@@ -1,61 +1,99 @@
+import { idbGet, idbSet } from "./idb";
+import { createEmptyDb, parseDb, serializeDb, type TraekyDb } from "./traekyDb";
 import type { Language } from "../i18n";
 
-import { idbGet, idbSet } from "./idb";
-import { createEmptyDb, type TraekyDb } from "./traekyDb";
-import { parseDbFromSqlite, serializeDbToSqlite } from "./sqliteCodec";
-import type { ProfileId } from "../auth/profileTypes";
-import type { EncryptedPayload } from "../crypto/cryptoService";
-
-//
-// Persistence model
-//
-// - Chromium browsers: File System Access API (persisted file handle)
-// - Firefox: snapshot persisted in IndexedDB + manual export/import (download/open)
-//
-
-type WindowWithFsAccess = Window & {
-  showOpenFilePicker?: (options?: unknown) => Promise<FileSystemFileHandle[]>;
-  showSaveFilePicker?: (options?: unknown) => Promise<FileSystemFileHandle>;
-};
+// Note: The DB file is treated as an opaque payload from the UI perspective.
+// We use a .sqlite filename for user familiarity; the app's serializer controls the actual content.
+export const DEFAULT_DB_FILE_NAME = "traeky-db.sqlite";
 
 export type DbSyncStatus = {
   isReady: boolean;
   isDirty: boolean;
   lastSyncedAt: string | null;
   fileLabel: string | null;
+  /**
+   * "handle" if the File System Access API is available and a file handle is bound.
+   * "download" otherwise.
+   */
+  saveMechanism: "handle" | "download";
   conflicts: number;
-  dbRevision: number;
-  isInitializing: boolean;
 };
 
 type DbListener = () => void;
 
-const IDB_HANDLE_KEY = "traeky:db:file-handle";
-const IDB_SNAPSHOT_KEY = "traeky:db:sqlite-snapshot";
-const IDB_FILE_LABEL_KEY = "traeky:db:file-label";
-
-// Legacy (localStorage) keys from older Traeky builds.
-const LS_PROFILES_INDEX_KEY = "traeky:profiles:index";
-const LS_PROFILE_DATA_PREFIX = "traeky:profile:";
-const LS_PROFILE_DATA_SUFFIX = ":data";
+type FilePickerType = { description: string; accept: Record<string, string[]> };
+type OpenFilePickerOptions = { types: FilePickerType[]; multiple: boolean };
+type SaveFilePickerOptions = { suggestedName: string; types: FilePickerType[] };
+type WindowWithFsAccess = Window & {
+  showOpenFilePicker?: (options: OpenFilePickerOptions) => Promise<FileSystemFileHandle[]>;
+  showSaveFilePicker?: (options: SaveFilePickerOptions) => Promise<FileSystemFileHandle>;
+};
 
 let db: TraekyDb | null = null;
 let isDirty = false;
 let lastSyncedAt: string | null = null;
 let fileLabel: string | null = null;
 let conflicts = 0;
-let isInitializing = false;
 
+// File System Access API handle (Chromium). Not supported in Firefox.
 let fileHandle: FileSystemFileHandle | null = null;
 
+const IDB_HANDLE_KEY = "db:file-handle";
+
 const listeners = new Set<DbListener>();
+
+function notify(): void {
+  for (const l of listeners) {
+    try {
+      l();
+    } catch {
+      // ignore
+    }
+  }
+}
 
 function nowIso(): string {
   return new Date().toISOString();
 }
 
-function notify(): void {
-  listeners.forEach((fn) => fn());
+
+async function readFileAsText(file: File): Promise<string> {
+  return await file.text();
+}
+
+function supportsFileSystemAccess(): boolean {
+  const w = window as WindowWithFsAccess;
+  return typeof w.showOpenFilePicker === "function";
+}
+
+function hasBoundHandle(): boolean {
+  return !!fileHandle;
+}
+
+async function tryReadBoundHandle(): Promise<void> {
+  if (!supportsFileSystemAccess()) {
+    return;
+  }
+  try {
+    const handle = await idbGet<FileSystemFileHandle | null>(IDB_HANDLE_KEY);
+    if (!handle) {
+      return;
+    }
+    // Firefox will throw on structured clone of handles, so this may be null.
+    fileHandle = handle;
+    const file = await handle.getFile();
+    const text = await readFileAsText(file);
+    const parsed = parseDb(text);
+    db = parsed;
+    isDirty = false;
+    lastSyncedAt = nowIso();
+    fileLabel = file.name;
+    conflicts = 0;
+    notify();
+  } catch {
+    // Ignore; user must pick manually.
+    fileHandle = null;
+  }
 }
 
 export function subscribeDb(listener: DbListener): () => void {
@@ -67,121 +105,126 @@ export function subscribeDb(listener: DbListener): () => void {
 
 export function getDbSyncStatus(): DbSyncStatus {
   return {
-    isReady: !!db && !isInitializing,
+    isReady: !!db,
     isDirty,
     lastSyncedAt,
     fileLabel,
+    saveMechanism: supportsFileSystemAccess() && hasBoundHandle() ? "handle" : "download",
     conflicts,
-    dbRevision: db?.meta?.revision ?? 0,
-    isInitializing,
   };
+}
+
+export function isDbReady(): boolean {
+  return !!db;
 }
 
 export function getDb(): TraekyDb {
   if (!db) {
-    throw new Error("Database not initialized");
+    throw new Error("Database not loaded");
   }
   return db;
 }
 
-
-// UI preferences
-const LS_UI_LANGUAGE_KEY = "traeky:ui:lang";
-
-export function getUiLanguage(defaultLang: Language): Language {
-  // Prefer the DB value (once initialized), fall back to localStorage.
-  if (db?.ui?.lang) return db.ui.lang;
-  const stored = localStorage.getItem(LS_UI_LANGUAGE_KEY);
-  return (stored as Language) || defaultLang;
-}
-
-export function setUiLanguage(lang: Language): void {
-  localStorage.setItem(LS_UI_LANGUAGE_KEY, lang);
-  if (db) {
-    db.ui.lang = lang;
-    markDbDirty();
-    notify();
-  }
-}
-
 export function markDbDirty(): void {
-  if (!db) {
-    throw new Error("Database not initialized");
-  }
+  if (!db) return;
   isDirty = true;
   db.updatedAt = nowIso();
   db.meta.revision = Math.max(1, (db.meta.revision ?? 0) + 1);
   notify();
 }
 
-function supportsFileSystemAccess(): boolean {
-  return typeof window !== "undefined" && "showOpenFilePicker" in window;
+export function setUiLanguage(lang: Language): void {
+  if (!db) return;
+  db.ui.lang = lang;
+  markDbDirty();
 }
 
-async function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error("File read failed"));
-    reader.onload = () => {
-      const result = reader.result;
-      if (result instanceof ArrayBuffer) {
-        resolve(result);
-        return;
-      }
-      reject(new Error("Unexpected file reader result"));
-    };
-    reader.readAsArrayBuffer(file);
-  });
+export function getUiLanguage(fallback: Language): Language {
+  if (!db) return fallback;
+  return db.ui.lang ?? fallback;
 }
 
-async function pickFileWithFallback(): Promise<File | null> {
-  const w = window as WindowWithFsAccess;
-  if (typeof w.showOpenFilePicker === "function") {
-    const handles = await w.showOpenFilePicker({
-      multiple: false,
-      types: [
-        {
-          description: "Traeky DB",
-          accept: {
-            "application/x-sqlite3": [".sqlite", ".db"],
-            "application/octet-stream": [".sqlite", ".db", ".traeky"],
-          },
-        },
-      ],
-    });
-    const handle = handles[0];
-    if (!handle) return null;
-    fileHandle = handle;
+export async function initDbAuto(defaultLang: Language): Promise<void> {
+  if (db) {
+    return;
+  }
+  // Start with an in-memory DB so the UI can render deterministically.
+  db = createEmptyDb(nowIso(), defaultLang);
+  isDirty = true;
+  fileLabel = null;
+  lastSyncedAt = null;
+  conflicts = 0;
+  notify();
+  await tryReadBoundHandle();
+}
+
+async function pickFileWithFallback(accept: string, opts?: { persistHandle?: boolean }): Promise<File | null> {
+  const persistHandle = opts?.persistHandle ?? false;
+
+  if (supportsFileSystemAccess()) {
     try {
-      await idbSet(IDB_HANDLE_KEY, handle);
+      const w = window as WindowWithFsAccess;
+      const [handle] = await w.showOpenFilePicker!({
+        types: [{ description: "Traeky DB", accept: { [accept]: [".sqlite", ".db", ".traeky", ".json"] } }],
+        multiple: false,
+      });
+      if (!handle) return null;
+
+      if (persistHandle) {
+        fileHandle = handle;
+        try {
+          await idbSet(IDB_HANDLE_KEY, handle);
+        } catch {
+          // Ignore (Firefox / permission issues).
+        }
+      }
+
+      const file = await handle.getFile();
+      if (persistHandle) {
+        fileLabel = file.name;
+      }
+      return file;
     } catch {
-      // ignore
+      return null;
     }
-    const file = await handle.getFile();
-    return file;
   }
 
-  // Firefox fallback: plain input picker.
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".sqlite,.db,.traeky";
+    input.accept = ".sqlite,.db,.traeky,.json,application/octet-stream,application/json";
     input.onchange = () => {
-      resolve(input.files && input.files[0] ? input.files[0] : null);
+      const file = input.files && input.files.length ? input.files[0] : null;
+      resolve(file);
     };
     input.click();
   });
 }
 
-async function loadDbFromFile(file: File, fallbackLang: Language): Promise<TraekyDb> {
-  const buf = await readFileAsArrayBuffer(file);
-  const bytes = new Uint8Array(buf);
-  return parseDbFromSqlite(bytes, fallbackLang);
+export async function openDbInteractive(): Promise<void> {
+  // "Open" binds a file handle (on Chrome/Edge) so future syncs can overwrite the same file.
+  const file = await pickFileWithFallback("application/octet-stream", { persistHandle: true });
+  if (!file) {
+    return;
+  }
+  const text = await readFileAsText(file);
+  db = parseDb(text);
+  isDirty = false;
+  lastSyncedAt = nowIso();
+  fileLabel = fileLabel ?? file.name;
+  conflicts = 0;
+  notify();
 }
 
-function saveViaDownload(filename: string, content: Uint8Array): void {
-  const bytes = Uint8Array.from(content);
-  const blob = new Blob([bytes], { type: "application/x-sqlite3" });
+async function saveViaHandle(handle: FileSystemFileHandle, content: string): Promise<void> {
+  const writable = await handle.createWritable();
+  await writable.write(content);
+  await writable.close();
+}
+
+function saveViaDownload(filename: string, content: string): void {
+  // Avoid ArrayBufferLike/SharedArrayBuffer typing issues by letting Blob handle UTF-8 encoding.
+  const blob = new Blob([content], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -193,333 +236,45 @@ function saveViaDownload(filename: string, content: Uint8Array): void {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-async function saveViaHandle(handle: FileSystemFileHandle, content: Uint8Array): Promise<void> {
-  const writable = await handle.createWritable();
-  await writable.write(Uint8Array.from(content));
-  await writable.close();
-}
-
-async function tryRestoreHandle(): Promise<void> {
-  if (!supportsFileSystemAccess()) {
-    return;
-  }
-  try {
-    const stored = await idbGet<FileSystemFileHandle>(IDB_HANDLE_KEY);
-    if (!stored) return;
-    fileHandle = stored;
-  } catch {
-    // ignore
-  }
-}
-
-async function tryLoadFromHandle(fallbackLang: Language): Promise<boolean> {
-  if (!supportsFileSystemAccess() || !fileHandle) {
-    return false;
-  }
-  try {
-    const file = await fileHandle.getFile();
-    const loaded = await loadDbFromFile(file, fallbackLang);
-    db = loaded;
-    isDirty = false;
-    lastSyncedAt = nowIso();
-    fileLabel = file.name;
-    conflicts = 0;
-    try {
-      await idbSet(IDB_FILE_LABEL_KEY, fileLabel);
-    } catch {
-      // ignore
-    }
-    await idbSet(IDB_SNAPSHOT_KEY, await serializeDbToSqlite(loaded));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function tryLoadFromSnapshot(fallbackLang: Language): Promise<boolean> {
-  try {
-    const stored = await idbGet<Uint8Array>(IDB_SNAPSHOT_KEY);
-    if (!stored) return false;
-    const loaded = await parseDbFromSqlite(stored, fallbackLang);
-    db = loaded;
-    isDirty = false;
-    conflicts = 0;
-    try {
-      const label = await idbGet<string>(IDB_FILE_LABEL_KEY);
-      if (typeof label === "string" && label) {
-        fileLabel = label;
-      }
-    } catch {
-      // ignore
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function getLocalStorage(): Storage | null {
-  try {
-    if (typeof window !== "undefined" && window.localStorage) {
-      return window.localStorage;
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
-function readLocalStorageJson(key: string): unknown {
-  const storage = getLocalStorage();
-  if (!storage) return null;
-  try {
-    const raw = storage.getItem(key);
-    if (!raw) return null;
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return null;
-  }
-}
-
-function buildLegacyProfileDataKey(profileId: string): string {
-  return `${LS_PROFILE_DATA_PREFIX}${profileId}${LS_PROFILE_DATA_SUFFIX}`;
-}
-
-function migrateLegacyLocalStorageIntoDb(target: TraekyDb): boolean {
-  if (target.index.profiles.length > 0) {
-    return false;
-  }
-  const idx = readLocalStorageJson(LS_PROFILES_INDEX_KEY);
-  if (!idx || typeof idx !== "object") {
-    return false;
-  }
-  const idxObj = idx as Record<string, unknown>;
-  const profilesCandidate = idxObj.profiles;
-  if (!Array.isArray(profilesCandidate) || profilesCandidate.length === 0) {
-    return false;
-  }
-
-  const importedProfiles = profilesCandidate
-    .filter((p): p is Record<string, unknown> => !!p && typeof p === "object")
-    .map((p) => {
-      const id = typeof p.id === "string" ? p.id : "";
-      const name = typeof p.name === "string" ? p.name : "";
-      if (!id || !name) return null;
-      const createdAt = typeof p.createdAt === "string" ? p.createdAt : nowIso();
-      const updatedAt = typeof p.updatedAt === "string" ? p.updatedAt : createdAt;
-      return { id, name, createdAt, updatedAt };
-    })
-    .filter((p): p is { id: ProfileId; name: string; createdAt: string; updatedAt: string } => !!p);
-
-  if (importedProfiles.length === 0) {
-    return false;
-  }
-
-  const importedProfileData: Record<ProfileId, EncryptedPayload | undefined> = {};
-  for (const p of importedProfiles) {
-    const payloadRaw = readLocalStorageJson(buildLegacyProfileDataKey(p.id));
-    if (!payloadRaw || typeof payloadRaw !== "object") {
-      continue;
-    }
-    const obj = payloadRaw as Record<string, unknown>;
-    const algorithm = obj.algorithm === "AES-GCM" ? "AES-GCM" : null;
-    const version = obj.version === 1 ? 1 : null;
-    const salt = typeof obj.salt === "string" ? obj.salt : null;
-    const iv = typeof obj.iv === "string" ? obj.iv : null;
-    const ciphertext = typeof obj.ciphertext === "string" ? obj.ciphertext : null;
-    if (!algorithm || !version || !salt || !iv || !ciphertext) {
-      continue;
-    }
-    importedProfileData[p.id] = {
-      version,
-      algorithm,
-      salt,
-      iv,
-      ciphertext,
-      scope: "legacy-appkey",
-    };
-  }
-
-
-  const existingProfiles = Array.isArray(target.index.profiles) ? target.index.profiles : [];
-  const existingIds = new Set(existingProfiles.map((p) => p.id));
-  const mergedProfiles = [...existingProfiles];
-  for (const p of importedProfiles) {
-    if (!existingIds.has(p.id)) {
-      mergedProfiles.push(p);
-    }
-  }
-
-  const mergedProfileData: Record<ProfileId, EncryptedPayload | undefined> = { ...(target.profileData ?? {}) };
-  let mergedDataCount = 0;
-  for (const [id, payload] of Object.entries(importedProfileData) as Array<[ProfileId, EncryptedPayload | undefined]>) {
-    if (payload && !mergedProfileData[id]) {
-      mergedProfileData[id] = payload;
-      mergedDataCount += 1;
-    }
-  }
-
-  // Prefer existing currentProfileId if it is still valid.
-  const existingCurrent = target.index.currentProfileId;
-  const legacyCurrent =
-    typeof idxObj.currentProfileId === "string" && mergedProfiles.some((p) => p.id === idxObj.currentProfileId)
-      ? (idxObj.currentProfileId as ProfileId)
-      : importedProfiles[0].id;
-
-  const currentProfileId =
-    existingCurrent && mergedProfiles.some((p) => p.id === existingCurrent) ? existingCurrent : legacyCurrent;
-
-  const addedProfiles = mergedProfiles.length - existingProfiles.length;
-  if (addedProfiles <= 0 && mergedDataCount <= 0) {
-    return false;
-  }
-
-  target.index = {
-    currentProfileId,
-    profiles: mergedProfiles,
-  };
-  target.profileData = mergedProfileData;
-  target.meta.revision = Math.max(1, (target.meta.revision ?? 0) + 1);
-  target.updatedAt = nowIso();
-  return true;
-}
-
-export async function initDbAuto(defaultLang: Language): Promise<void> {
-  if (db || isInitializing) {
-    return;
-  }
-  isInitializing = true;
-  notify();
-
-  // Try persisted handle and snapshot first.
-  await tryRestoreHandle();
-  const snapshotLoaded = await tryLoadFromSnapshot(defaultLang);
-  if (!snapshotLoaded) {
-    await tryLoadFromHandle(defaultLang);
-  }
-
-  // If nothing is loaded, create an empty DB in memory.
-  if (!db) {
-    db = createEmptyDb(nowIso(), defaultLang);
-    isDirty = true;
-    lastSyncedAt = null;
-    conflicts = 0;
-    fileLabel = fileLabel ?? "traeky-db.sqlite";
-  }
-
-  // Migrate legacy localStorage profiles into the DB if the DB is empty.
-  const migrated = migrateLegacyLocalStorageIntoDb(db);
-  if (migrated) {
-    isDirty = true;
-    lastSyncedAt = null;
-  }
-
-  // Persist a snapshot so Firefox has storage across reloads.
-  try {
-    const snapshot = await serializeDbToSqlite(db);
-    await idbSet(IDB_SNAPSHOT_KEY, snapshot);
-    if (fileLabel) {
-      await idbSet(IDB_FILE_LABEL_KEY, fileLabel);
-    }
-  } catch {
-    // ignore
-  }
-
-  isInitializing = false;
-  notify();
-}
-
-export async function openDbInteractive(fallbackLang: Language = 'en'): Promise<void> {
-  const file = await pickFileWithFallback();
-  if (!file) return;
-  const loaded = await loadDbFromFile(file, fallbackLang);
-  db = loaded;
-  isDirty = false;
-  lastSyncedAt = nowIso();
-  conflicts = 0;
-  fileLabel = file.name;
-  try {
-    await idbSet(IDB_FILE_LABEL_KEY, fileLabel);
-  } catch {
-    // ignore
-  }
-  try {
-    await idbSet(IDB_SNAPSHOT_KEY, await serializeDbToSqlite(loaded));
-  } catch {
-    // ignore
-  }
-  notify();
-}
-
 export async function syncDbNow(): Promise<void> {
   if (!db) {
     throw new Error("Database not loaded");
   }
-  const binary = await serializeDbToSqlite(db);
+  const content = serializeDb(db);
 
-  const suggested = fileLabel ?? "traeky-db.sqlite";
   if (supportsFileSystemAccess() && fileHandle) {
-    await saveViaHandle(fileHandle, binary);
+    await saveViaHandle(fileHandle, content);
   } else {
     const w = window as WindowWithFsAccess;
     if (typeof w.showSaveFilePicker === "function") {
-      const handle = await w.showSaveFilePicker({
-        suggestedName: suggested,
-        types: [
-          {
-            description: "Traeky DB",
-            accept: {
-              "application/x-sqlite3": [".sqlite", ".db"],
-              "application/octet-stream": [".sqlite", ".db", ".traeky"],
-            },
-          },
-        ],
-      });
-      fileHandle = handle;
-      try {
-        await idbSet(IDB_HANDLE_KEY, handle);
-      } catch {
-        // ignore
-      }
-      await saveViaHandle(handle, binary);
+    // In some Chromium builds, showSaveFilePicker is available even without persisted handles.
+      const handle: FileSystemFileHandle = await w.showSaveFilePicker({
+      suggestedName: fileLabel ?? DEFAULT_DB_FILE_NAME,
+      types: [
+        {
+          description: "Traeky DB",
+          accept: { "application/octet-stream": [".sqlite", ".json"] },
+        },
+      ],
+    });
+    fileHandle = handle;
+    try {
+      await idbSet(IDB_HANDLE_KEY, handle);
+    } catch {
+      // ignore
+    }
+      await saveViaHandle(handle, content);
     } else {
-      // Automatic file sync is not available in this browser (e.g. Firefox).
-      // We still persist the snapshot into IndexedDB below so users do not lose data.
+      saveViaDownload(fileLabel ?? DEFAULT_DB_FILE_NAME, content);
     }
   }
 
   isDirty = false;
   lastSyncedAt = nowIso();
-  conflicts = 0;
-  fileLabel = suggested;
-  try {
-    await idbSet(IDB_SNAPSHOT_KEY, binary);
-    await idbSet(IDB_FILE_LABEL_KEY, suggested);
-  } catch {
-    // ignore
-  }
   notify();
 }
 
-export async function exportDbNow(): Promise<void> {
-  if (!db) {
-    throw new Error("Database not loaded");
-  }
-  const binary = await serializeDbToSqlite(db);
-  const name = fileLabel ?? "traeky-db.sqlite";
-  // Explicit user action: export the encrypted DB file via browser download.
-  saveViaDownload(name, binary);
-}
-
-export async function createNewDbInteractive(defaultLang: Language): Promise<void> {
-  db = createEmptyDb(nowIso(), defaultLang);
-  isDirty = true;
-  lastSyncedAt = null;
-  conflicts = 0;
-  fileLabel = "traeky-db.sqlite";
-  notify();
-  await syncDbNow();
-}
+type AnyProfileMeta = { id: string; updatedAt: string };
 
 function compareIso(a: string, b: string): number {
   const ta = Date.parse(a);
@@ -535,7 +290,8 @@ function compareIso(a: string, b: string): number {
  *
  * - Profiles are merged by id.
  * - The newer updatedAt wins.
- * - If updatedAt is equal but payload differs, we keep the local version and record a conflict.
+ * - If updatedAt is equal but payload differs, we keep the local version and
+ *   record a conflict counter so the UI can warn.
  */
 export function mergeImportedDb(imported: TraekyDb): void {
   if (!db) {
@@ -548,11 +304,16 @@ export function mergeImportedDb(imported: TraekyDb): void {
   }
 
   const local = db;
-  const allIds = new Set<string>([
-    ...local.index.profiles.map((p) => p.id),
-    ...imported.index.profiles.map((p) => p.id),
-  ]);
+  const localProfiles = new Map<string, AnyProfileMeta>();
+  for (const p of local.index.profiles) {
+    localProfiles.set(p.id, { id: p.id, updatedAt: p.updatedAt });
+  }
+  const importedProfiles = new Map<string, AnyProfileMeta>();
+  for (const p of imported.index.profiles) {
+    importedProfiles.set(p.id, { id: p.id, updatedAt: p.updatedAt });
+  }
 
+  const allIds = new Set<string>([...localProfiles.keys(), ...importedProfiles.keys()]);
   const mergedProfiles: typeof local.index.profiles = [];
   const mergedData: typeof local.profileData = { ...local.profileData };
   let conflictCount = 0;
@@ -599,6 +360,7 @@ export function mergeImportedDb(imported: TraekyDb): void {
   local.index.profiles = mergedProfiles;
   local.profileData = mergedData;
 
+  // Keep local ui settings and currentProfileId unless it becomes invalid.
   if (local.index.currentProfileId && !mergedData[local.index.currentProfileId]) {
     local.index.currentProfileId = mergedProfiles.length ? mergedProfiles[0].id : null;
   }
@@ -607,9 +369,12 @@ export function mergeImportedDb(imported: TraekyDb): void {
   markDbDirty();
 }
 
-export async function importDbInteractive(fallbackLang: Language = 'en'): Promise<void> {
-  const file = await pickFileWithFallback();
+export async function importDbInteractive(): Promise<void> {
+  // "Import" loads a file into the in-browser DB, but does NOT bind a file handle
+  // (so future exports won't overwrite the imported file automatically).
+  const file = await pickFileWithFallback("application/octet-stream");
   if (!file) return;
-  const imported = await loadDbFromFile(file, fallbackLang);
+  const text = await readFileAsText(file);
+  const imported = parseDb(text);
   mergeImportedDb(imported);
 }
