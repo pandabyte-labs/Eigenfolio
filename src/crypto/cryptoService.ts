@@ -18,6 +18,13 @@ export interface EncryptedPayload {
   iv: string;
   /** Base64-encoded ciphertext of the JSON payload. */
   ciphertext: string;
+  /**
+   * Optional marker describing which secret was used to encrypt this payload.
+   *
+   * - "pin": encrypted with the profile PIN-derived key (current).
+   * - "legacy-appkey": encrypted with an application-wide key (legacy).
+   */
+  scope?: "pin" | "legacy-appkey";
 }
 
 

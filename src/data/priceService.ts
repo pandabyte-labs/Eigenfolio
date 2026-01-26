@@ -24,7 +24,26 @@ type PriceCacheEntry = {
   fetched_at: number;
 };
 
-const PRICE_CACHE_KEY = "traeky:price-cache-v1";
+export type AssetPriceCacheEntry = PriceCacheEntry;
+export type AssetPriceCache = Record<string, AssetPriceCacheEntry>;
+
+export interface PriceCacheProvider {
+  loadPriceCache(): AssetPriceCache;
+  savePriceCache(cache: AssetPriceCache): void;
+  loadHistoricalPriceCache(): Record<string, PriceCacheEntry>;
+  saveHistoricalPriceCache(cache: Record<string, PriceCacheEntry>): void;
+}
+
+let cacheProvider: PriceCacheProvider | null = null;
+
+export function setPriceCacheProvider(provider: PriceCacheProvider | null): void {
+  cacheProvider = provider;
+  // Reset so the next access pulls fresh data.
+  priceCacheLoaded = false;
+  priceCache = null;
+  historicalPriceCache = null;
+}
+
 let priceCache: Record<string, PriceCacheEntry> | null = null;
 let priceCacheLoaded = false;
 
@@ -37,28 +56,22 @@ function ensurePriceCacheLoaded(): void {
   if (priceCacheLoaded) return;
   priceCacheLoaded = true;
   try {
-    const raw = window.localStorage.getItem(PRICE_CACHE_KEY);
-    if (!raw) {
-      priceCache = {};
+    if (cacheProvider) {
+      priceCache = cacheProvider.loadPriceCache() ?? {};
       return;
     }
-    const parsed = JSON.parse(raw) as Record<string, PriceCacheEntry>;
-    if (parsed && typeof parsed === "object") {
-      priceCache = parsed;
-    } else {
-      priceCache = {};
-    }
   } catch {
-    priceCache = {};
+    // ignore
   }
+  priceCache = {};
 }
 
 function persistPriceCache(): void {
   if (!priceCache) return;
   try {
-    window.localStorage.setItem(PRICE_CACHE_KEY, JSON.stringify(priceCache));
+    cacheProvider?.savePriceCache({ ...priceCache });
   } catch {
-    // ignore persistence errors and keep the in-memory cache only
+    // ignore and keep in-memory only
   }
 }
 
@@ -249,10 +262,6 @@ const uniqueSymbols = Array.from(new Set(symbols.map((s) => s.toUpperCase())));
  * FX rates are left as null for now.
  */
 
-export type AssetPriceCacheEntry = PriceCacheEntry;
-
-export type AssetPriceCache = Record<string, AssetPriceCacheEntry>;
-
 /**
  * Return a snapshot of the current in-memory/localStorage price cache.
  *
@@ -280,38 +289,27 @@ type HistoricalPriceCacheEntry = PriceCacheEntry;
 
 type HistoricalPriceCache = Record<string, HistoricalPriceCacheEntry>;
 
-const HISTORICAL_PRICE_CACHE_KEY = "traeky:price-cache-historical-v1";
-
 let historicalPriceCache: HistoricalPriceCache | null = null;
 
 function ensureHistoricalPriceCacheLoaded(): void {
   if (historicalPriceCache !== null) return;
   try {
-    const raw = window.localStorage.getItem(HISTORICAL_PRICE_CACHE_KEY);
-    if (!raw) {
-      historicalPriceCache = {};
+    if (cacheProvider) {
+      historicalPriceCache = cacheProvider.loadHistoricalPriceCache() ?? {};
       return;
     }
-    const parsed = JSON.parse(raw) as HistoricalPriceCache;
-    if (parsed && typeof parsed === "object") {
-      historicalPriceCache = parsed;
-    } else {
-      historicalPriceCache = {};
-    }
   } catch {
-    historicalPriceCache = {};
+    // ignore
   }
+  historicalPriceCache = {};
 }
 
 function persistHistoricalPriceCache(): void {
   if (!historicalPriceCache) return;
   try {
-    window.localStorage.setItem(
-      HISTORICAL_PRICE_CACHE_KEY,
-      JSON.stringify(historicalPriceCache),
-    );
+    cacheProvider?.saveHistoricalPriceCache({ ...historicalPriceCache });
   } catch {
-    // Ignore persistence errors and keep the in-memory cache only.
+    // ignore
   }
 }
 

@@ -1,8 +1,8 @@
 import { encryptJsonWithPassphrase, decryptJsonWithPassphrase, type EncryptedPayload } from "../crypto/cryptoService";
 
 // NOTE:
-//   This avoids subtle issues where changing the PIN or salt would make old data unreadable.
-// - The PIN hash is stored separately in localStorage and compared during login.
+// Profile data is encrypted with a key derived from the profile PIN.
+// We only ever keep/compare the PIN hash in memory during a session.
 
 const rawProfilePinSalt =
   (import.meta.env.VITE_PROFILE_PIN_SALT as string | undefined) ??
@@ -10,15 +10,13 @@ const rawProfilePinSalt =
 
 const PROFILE_PIN_SALT = rawProfilePinSalt ?? "";
 
-const rawProfileEncryptionKey =
+// Legacy support: some older Traeky builds encrypted profile data with an app-wide key.
+// This is only used to migrate old data; new data is always encrypted with the profile PIN-derived key.
+const rawLegacyProfileEncryptionKey =
   (import.meta.env.VITE_PROFILE_ENCRYPTION_KEY as string | undefined) ??
   (import.meta.env.TRAEKY_PROFILE_ENCRYPTION_KEY as string | undefined);
 
-if (!rawProfileEncryptionKey) {
-  throw new Error("Missing profile encryption key in environment");
-}
-
-const PROFILE_ENCRYPTION_KEY = rawProfileEncryptionKey;
+const LEGACY_PROFILE_ENCRYPTION_KEY = rawLegacyProfileEncryptionKey ?? null;
 function getWebCrypto(): Crypto {
   if (typeof globalThis !== "undefined" && globalThis.crypto && "subtle" in globalThis.crypto) {
     return globalThis.crypto as Crypto;
@@ -46,11 +44,24 @@ export async function hashPin(pin: string): Promise<string> {
 }
 
 export async function encryptProfilePayload<T>(pinHash: string, payload: T): Promise<EncryptedPayload> {
-  // NOTE: pinHash is intentionally ignored here. We always use a fixed encryption key.
-  return encryptJsonWithPassphrase(payload, PROFILE_ENCRYPTION_KEY);
+  if (!pinHash) {
+    throw new Error("Missing PIN hash");
+  }
+  const encrypted = await encryptJsonWithPassphrase(payload, pinHash);
+  return { ...encrypted, scope: "pin" };
 }
 
 export async function decryptProfilePayload<T>(pinHash: string, encrypted: EncryptedPayload): Promise<T> {
-  // NOTE: pinHash is intentionally ignored here. We always use a fixed encryption key.
-  return decryptJsonWithPassphrase<T>(encrypted, PROFILE_ENCRYPTION_KEY);
+  // If this payload is marked as legacy, attempt legacy-key decryption.
+  if (encrypted.scope === "legacy-appkey") {
+    if (!LEGACY_PROFILE_ENCRYPTION_KEY) {
+      throw new Error("Legacy profile encryption key is not configured");
+    }
+    return decryptJsonWithPassphrase<T>(encrypted, LEGACY_PROFILE_ENCRYPTION_KEY);
+  }
+
+  if (!pinHash) {
+    throw new Error("Missing PIN hash");
+  }
+  return decryptJsonWithPassphrase<T>(encrypted, pinHash);
 }
