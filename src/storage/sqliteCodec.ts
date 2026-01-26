@@ -78,6 +78,15 @@ function getMeta(db: SqlDatabase, key: string): string | null {
   return typeof v === "string" ? v : null;
 }
 
+function putMeta(db: SqlDatabase, key: string, value: string): void {
+  exec(
+    db,
+    "INSERT INTO meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
+    [key, value],
+  );
+}
+
+
 function upsertUi(db: SqlDatabase, lang: Language, mode: DataSourceMode): void {
   exec(
     db,

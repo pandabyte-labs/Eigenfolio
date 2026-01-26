@@ -84,6 +84,26 @@ export function getDb(): TraekyDb {
   return db;
 }
 
+
+// UI preferences
+const LS_UI_LANGUAGE_KEY = "traeky:ui:lang";
+
+export function getUiLanguage(defaultLang: Language): Language {
+  // Prefer the DB value (once initialized), fall back to localStorage.
+  if (db?.ui?.lang) return db.ui.lang;
+  const stored = localStorage.getItem(LS_UI_LANGUAGE_KEY);
+  return (stored as Language) || defaultLang;
+}
+
+export function setUiLanguage(lang: Language): void {
+  localStorage.setItem(LS_UI_LANGUAGE_KEY, lang);
+  if (db) {
+    db.ui.lang = lang;
+    markDbDirty();
+    notify();
+  }
+}
+
 export function markDbDirty(): void {
   if (!db) {
     throw new Error("Database not initialized");
@@ -409,7 +429,7 @@ export async function initDbAuto(defaultLang: Language): Promise<void> {
   notify();
 }
 
-export async function openDbInteractive(fallbackLang: Language): Promise<void> {
+export async function openDbInteractive(fallbackLang: Language = 'en'): Promise<void> {
   const file = await pickFileWithFallback();
   if (!file) return;
   const loaded = await loadDbFromFile(file, fallbackLang);
@@ -576,7 +596,7 @@ export function mergeImportedDb(imported: TraekyDb): void {
   markDbDirty();
 }
 
-export async function importDbInteractive(fallbackLang: Language): Promise<void> {
+export async function importDbInteractive(fallbackLang: Language = 'en'): Promise<void> {
   const file = await pickFileWithFallback();
   if (!file) return;
   const imported = await loadDbFromFile(file, fallbackLang);
