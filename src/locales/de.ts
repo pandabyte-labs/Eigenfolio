@@ -85,8 +85,6 @@ export const de: Record<string, string> = {
   db_export_button: "Export",
   db_select_description: "Wähle eine Datenbankdatei aus oder erstelle eine neue. Traeky speichert alle Daten ausschließlich in dieser Datei.",
   db_select_description_firefox: "Hinweis (Firefox): Ohne Dateizugriffs-API erfolgt der Sync über Export/Import. Stelle sicher, dass Firefox beim Speichern nach einem Ort fragt, damit du dieselbe Datei wieder überschreiben kannst.",
-  db_settings_firefox_download_note:
-    "Firefox kann heruntergeladene Dateien nicht still überschreiben. Wenn du mehrfach exportierst, wird ein Suffix wie (1), (2) angehängt. Aktiviere in Firefox \"Immer nachfragen, wo Dateien gespeichert werden\", um gezielt zu überschreiben.",
   db_open_button: "Datenbank öffnen",
   db_create_button: "Neue Datenbank erstellen",
   db_import_button: "Datenbank importieren",

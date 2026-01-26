@@ -85,8 +85,6 @@ export const en: Record<string, string> = {
   db_export_button: "Export",
   db_select_description: "Select a database file or create a new one. Traeky stores all data exclusively in this file.",
   db_select_description_firefox: "Note (Firefox): Without the File System Access API, syncing works via export/import. Configure Firefox to ask for a save location so you can overwrite the same file.",
-  db_settings_firefox_download_note:
-    "Firefox blocks silent overwrites of downloaded files. If you sync repeatedly, the browser may save traeky-db(1).sqlite, traeky-db(2).sqlite, etc. Enable \"Always ask where to save files\" to overwrite the same file.",
   db_open_button: "Open database",
   db_create_button: "Create new database",
   db_import_button: "Import database",
