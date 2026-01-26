@@ -43,6 +43,10 @@ const RESET_CONFIRMATION_WORD = "RESET";
 
 const APP_VERSION = packageJson.version;
 
+const supportsFileSystemAccessApi =
+  typeof (globalThis as any).showSaveFilePicker === "function" &&
+  typeof (globalThis as any).showOpenFilePicker === "function";
+
 function formatTxTypeLabel(txType: string | null | undefined): string {
   const code = (txType || "").toUpperCase();
   switch (code) {
@@ -1489,83 +1493,122 @@ const handleReloadHoldingPrices = async () => {
         </div>
 
         <div className="settings-grid">
-<div className="card settings-card">
-<div className="sidebar-section">
-  <h2>{t(lang, "db_settings_title")}</h2>
-  <p className="muted">{t(lang, "db_settings_description")}</p>
-  <div className="form-row">
-    <label>{t(lang, "db_settings_file_label")}</label>
-    <p className="muted" style={{ margin: 0 }}>
-      {dbSyncStatus.fileLabel ? dbSyncStatus.fileLabel : t(lang, "db_settings_no_file")}
-    </p>
-  </div>
-  <div className="form-row" style={{ marginTop: "0.5rem" }}>
-    <label>{t(lang, "db_settings_sync_status_label")}</label>
-    <p className="muted" style={{ margin: 0 }}>
-      {dbSyncStatus.isDirty ? t(lang, "db_sync_state_dirty") : t(lang, "db_sync_state_clean")}
-      {dbSyncStatus.lastSyncedAt ? ` · ${t(lang, "db_settings_last_sync")} ${new Intl.DateTimeFormat(currentLocale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(dbSyncStatus.lastSyncedAt))}` : ""}
-      {dbSyncStatus.conflicts > 0 ? ` · ${t(lang, "db_settings_conflicts")} ${dbSyncStatus.conflicts}` : ""}
-    </p>
-  </div>
-  <div style={{ marginTop: "0.75rem", display: "flex", flexWrap: "wrap", gap: "0.5rem", justifyContent: "center" }}>
-    <button
-      type="button"
-      className="btn-secondary"
-      onClick={async () => {
-        await openDbInteractive();
-        setLang(getUiLanguage(defaultLang));
-        const overview = getProfileOverview();
-        setProfileOverview(overview);
-        if (overview.profiles.length > 0 && !loginProfileId) {
-          setLoginProfileId(overview.profiles[0].id);
-        }
-      }}
-    >
-      {t(lang, "db_open_button")}
-    </button>
-    <button
-      type="button"
-      className="btn-secondary"
-      onClick={async () => {
-        await createNewDbInteractive(defaultLang);
-        setLang(getUiLanguage(defaultLang));
-        const overview = getProfileOverview();
-        setProfileOverview(overview);
-        if (overview.profiles.length > 0 && !loginProfileId) {
-          setLoginProfileId(overview.profiles[0].id);
-        }
-      }}
-    >
-      {t(lang, "db_create_button")}
-    </button>
-    <button
-      type="button"
-      className="btn-secondary"
-      onClick={async () => {
-        await importDbInteractive();
-        setLang(getUiLanguage(defaultLang));
-        const overview = getProfileOverview();
-        setProfileOverview(overview);
-        if (overview.profiles.length > 0 && !loginProfileId) {
-          setLoginProfileId(overview.profiles[0].id);
-        }
-      }}
-    >
-      {t(lang, "db_import_button")}
-    </button>
-    <button
-      type="button"
-      className={dbSyncStatus.isDirty ? "btn-primary" : "btn-secondary"}
-      onClick={async () => {
-        await syncDbNow();
-      }}
-      disabled={!dbSyncStatus.isReady}
-    >
-      {t(lang, "db_sync_button")}
-    </button>
-  </div>
-</div>
-  </div>
+          <div className="card settings-card">
+            <div className="sidebar-section">
+              <h2>{t(lang, "db_settings_title")}</h2>
+              <p className="muted">{t(lang, "db_settings_description")}</p>
+
+              <div className="db-sync-summary" role="list">
+                <div className="db-sync-row" role="listitem">
+                  <span className="db-sync-label">{t(lang, "db_settings_file_label")}</span>
+                  <span className="db-sync-value">
+                    {dbSyncStatus.fileLabel ? dbSyncStatus.fileLabel : t(lang, "db_settings_default_file")}
+                  </span>
+                </div>
+                <div className="db-sync-row" role="listitem">
+                  <span className="db-sync-label">{t(lang, "db_settings_status_label")}</span>
+                  <span className="db-sync-value">
+                    <span
+                      className={`status-badge ${
+                        !dbSyncStatus.isReady
+                          ? "status-neutral"
+                          : dbSyncStatus.isDirty
+                            ? "status-warn"
+                            : "status-ok"
+                      }`}
+                    >
+                      {!dbSyncStatus.isReady
+                        ? t(lang, "db_settings_status_not_connected")
+                        : dbSyncStatus.isDirty
+                          ? t(lang, "db_settings_status_not_synced")
+                          : t(lang, "db_settings_status_synced")}
+                    </span>
+                    {dbSyncStatus.conflicts > 0 ? (
+                      <span className="muted" style={{ marginLeft: "0.5rem" }}>
+                        {t(lang, "db_settings_conflicts")} {dbSyncStatus.conflicts}
+                      </span>
+                    ) : null}
+                  </span>
+                </div>
+                <div className="db-sync-row" role="listitem">
+                  <span className="db-sync-label">{t(lang, "db_settings_last_sync_label")}</span>
+                  <span className="db-sync-value">
+                    {dbSyncStatus.lastSyncedAt
+                      ? new Intl.DateTimeFormat(currentLocale, {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        }).format(new Date(dbSyncStatus.lastSyncedAt))
+                      : "—"}
+                  </span>
+                </div>
+              </div>
+
+              {!supportsFileSystemAccessApi ? (
+                <p className="muted settings-field-help" style={{ marginTop: "0.75rem" }}>
+                  {t(lang, "db_settings_firefox_download_note")}
+                </p>
+              ) : null}
+
+              <div className="db-sync-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={async () => {
+                    await openDbInteractive();
+                    setLang(getUiLanguage(defaultLang));
+                    const overview = getProfileOverview();
+                    setProfileOverview(overview);
+                    if (overview.profiles.length > 0 && !loginProfileId) {
+                      setLoginProfileId(overview.profiles[0].id);
+                    }
+                  }}
+                >
+                  {t(lang, "db_open_button")}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={async () => {
+                    await createNewDbInteractive(defaultLang);
+                    setLang(getUiLanguage(defaultLang));
+                    const overview = getProfileOverview();
+                    setProfileOverview(overview);
+                    if (overview.profiles.length > 0 && !loginProfileId) {
+                      setLoginProfileId(overview.profiles[0].id);
+                    }
+                  }}
+                >
+                  {t(lang, "db_create_button")}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={async () => {
+                    await importDbInteractive();
+                    setLang(getUiLanguage(defaultLang));
+                    const overview = getProfileOverview();
+                    setProfileOverview(overview);
+                    if (overview.profiles.length > 0 && !loginProfileId) {
+                      setLoginProfileId(overview.profiles[0].id);
+                    }
+                  }}
+                >
+                  {t(lang, "db_import_button")}
+                </button>
+
+                <button
+                  type="button"
+                  className={dbSyncStatus.isDirty ? "btn-primary" : "btn-secondary"}
+                  onClick={async () => {
+                    await syncDbNow();
+                  }}
+                  disabled={!dbSyncStatus.isReady}
+                >
+                  {supportsFileSystemAccessApi ? t(lang, "db_sync_button") : t(lang, "db_export_button")}
+                </button>
+              </div>
+            </div>
+          </div>
 <div className="card settings-card">
 <div className="sidebar-section">
           <h2>{t(lang, "settings_language_title")}</h2>
@@ -2025,7 +2068,7 @@ const handleReloadHoldingPrices = async () => {
             )}
             <button
               type="button"
-              className={`icon-circle-button ${dbSyncStatus.isDirty ? "sync-dirty" : "sync-clean"}`}
+              className={`sync-button ${dbSyncStatus.isDirty ? "sync-dirty" : "sync-clean"}`}
               onClick={async () => {
                 try {
                   await syncDbNow();
@@ -2041,7 +2084,23 @@ const handleReloadHoldingPrices = async () => {
               }
               disabled={!dbSyncStatus.isReady}
             >
-              <span aria-hidden="true">⟳</span>
+              <span aria-hidden="true" className="sync-icon">
+                <svg
+                  viewBox="0 0 24 24"
+                  width="18"
+                  height="18"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <ellipse cx="12" cy="5" rx="8" ry="3" />
+                  <path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5" />
+                  <path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
+                </svg>
+              </span>
+              <span className="sync-label">{t(lang, "db_sync_button_label")}</span>
               <span aria-hidden="true" className="sync-dot" />
             </button>
             <button
