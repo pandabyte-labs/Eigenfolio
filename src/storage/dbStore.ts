@@ -160,7 +160,10 @@ async function loadDbFromFile(file: File, fallbackLang: Language): Promise<Traek
 }
 
 function saveViaDownload(filename: string, content: Uint8Array): void {
-  const blob = new Blob([content], { type: "application/x-sqlite3" });
+  // TS DOM libs type BlobPart as ArrayBuffer (not ArrayBufferLike). sql.js returns Uint8Array<ArrayBufferLike>
+  // in newer TS versions, so we normalize to a plain ArrayBuffer.
+  const arrayBuffer = new Uint8Array(content).buffer;
+  const blob = new Blob([arrayBuffer], { type: "application/x-sqlite3" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -174,7 +177,9 @@ function saveViaDownload(filename: string, content: Uint8Array): void {
 
 async function saveViaHandle(handle: FileSystemFileHandle, content: Uint8Array): Promise<void> {
   const writable = await handle.createWritable();
-  await writable.write(content);
+  // Same normalization as in saveViaDownload.
+  const arrayBuffer = new Uint8Array(content).buffer;
+  await writable.write(arrayBuffer);
   await writable.close();
 }
 
@@ -379,10 +384,11 @@ export async function initDbAuto(defaultLang: Language): Promise<void> {
   notify();
 }
 
-export async function openDbInteractive(fallbackLang: Language): Promise<void> {
+export async function openDbInteractive(fallbackLang?: Language): Promise<void> {
   const file = await pickFileWithFallback();
   if (!file) return;
-  const loaded = await loadDbFromFile(file, fallbackLang);
+  const lang = fallbackLang ?? db?.ui.lang ?? "en";
+  const loaded = await loadDbFromFile(file, lang);
   db = loaded;
   isDirty = false;
   lastSyncedAt = nowIso();
@@ -546,9 +552,21 @@ export function mergeImportedDb(imported: TraekyDb): void {
   markDbDirty();
 }
 
-export async function importDbInteractive(fallbackLang: Language): Promise<void> {
+export async function importDbInteractive(fallbackLang?: Language): Promise<void> {
   const file = await pickFileWithFallback();
   if (!file) return;
-  const imported = await loadDbFromFile(file, fallbackLang);
+  const lang = fallbackLang ?? db?.ui.lang ?? "en";
+  const imported = await loadDbFromFile(file, lang);
   mergeImportedDb(imported);
+}
+
+export function getUiLanguage(fallback: Language): Language {
+  return db?.ui.lang ?? fallback;
+}
+
+export function setUiLanguage(lang: Language): void {
+  if (!db) return;
+  if (db.ui.lang === lang) return;
+  db.ui.lang = lang;
+  markDbDirty();
 }
