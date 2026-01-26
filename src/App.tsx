@@ -48,6 +48,39 @@ const supportsFileSystemAccessApi =
   typeof (globalThis as any).showSaveFilePicker === "function" &&
   typeof (globalThis as any).showOpenFilePicker === "function";
 
+type DatabaseIconProps = {
+  className?: string;
+  title?: string;
+};
+
+const DatabaseIcon = ({ className, title }: DatabaseIconProps) => (
+  <svg
+    className={className}
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    role="img"
+    aria-label={title ?? "Database"}
+  >
+    {title ? <title>{title}</title> : null}
+    <ellipse cx="12" cy="5" rx="8" ry="3" stroke="currentColor" strokeWidth="2" />
+    <path
+      d="M4 5v6c0 1.657 3.582 3 8 3s8-1.343 8-3V5"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+    />
+    <path
+      d="M4 11v6c0 1.657 3.582 3 8 3s8-1.343 8-3v-6"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+    />
+  </svg>
+);
+
 function formatTxTypeLabel(txType: string | null | undefined): string {
   const code = (txType || "").toUpperCase();
   switch (code) {
@@ -1539,7 +1572,7 @@ const handleReloadHoldingPrices = async () => {
                       aria-label={t(lang, "db_sync_button_aria")}
                     >
                       <DatabaseIcon className="sync-icon" />
-                      <span className="sync-label">{t(lang, "db_sync_button_label")}</span>
+	                      <span className="sync-label">{t(lang, "db_sync_button")}</span>
                     </button>
                   ) : null}
                   </span>
@@ -2115,7 +2148,7 @@ const handleReloadHoldingPrices = async () => {
                   <path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" />
                 </svg>
               </span>
-              <span className="sync-label">{t(lang, "db_sync_button_label")}</span>
+	              <span className="sync-label">{t(lang, "db_sync_button")}</span>
               <span aria-hidden="true" className="sync-dot" />
             </button>
             <button
