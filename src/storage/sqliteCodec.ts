@@ -42,6 +42,11 @@ function exec(db: SqlDatabase, sql: string, params: unknown[] = []): void {
   db.run(sql, params as unknown as never[]);
 }
 
+function execScript(db: SqlDatabase, sql: string): void {
+  // sql.js supports executing multiple statements in one call via exec().
+  db.exec(sql);
+}
+
 function queryRows(db: SqlDatabase, sql: string, params: unknown[] = []): unknown[][] {
   const result = db.exec(sql, params as unknown as never[]);
   if (!result || result.length === 0) return [];
@@ -55,7 +60,7 @@ function queryScalar(db: SqlDatabase, sql: string, params: unknown[] = []): unkn
 }
 
 function createSchema(db: SqlDatabase): void {
-  exec(
+  execScript(
     db,
     [
       "PRAGMA journal_mode = MEMORY;",
@@ -64,15 +69,8 @@ function createSchema(db: SqlDatabase): void {
       "CREATE TABLE IF NOT EXISTS ui_settings (id INTEGER PRIMARY KEY CHECK (id = 1), lang TEXT NOT NULL, mode TEXT NOT NULL);",
       "CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);",
       "CREATE TABLE IF NOT EXISTS profile_data (profile_id TEXT PRIMARY KEY, version INTEGER NOT NULL, algorithm TEXT NOT NULL, salt TEXT NOT NULL, iv TEXT NOT NULL, ciphertext TEXT NOT NULL, scope TEXT, updated_at TEXT NOT NULL, FOREIGN KEY(profile_id) REFERENCES profiles(id) ON DELETE CASCADE);",
-    ].join("\n"),
+    ].join("\n")
   );
-}
-
-function putMeta(db: SqlDatabase, key: string, value: string): void {
-  exec(db, "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value;", [
-    key,
-    value,
-  ]);
 }
 
 function getMeta(db: SqlDatabase, key: string): string | null {

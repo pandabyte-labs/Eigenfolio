@@ -160,10 +160,8 @@ async function loadDbFromFile(file: File, fallbackLang: Language): Promise<Traek
 }
 
 function saveViaDownload(filename: string, content: Uint8Array): void {
-  // TS DOM libs type BlobPart as ArrayBuffer (not ArrayBufferLike). sql.js returns Uint8Array<ArrayBufferLike>
-  // in newer TS versions, so we normalize to a plain ArrayBuffer.
-  const arrayBuffer = new Uint8Array(content).buffer;
-  const blob = new Blob([arrayBuffer], { type: "application/x-sqlite3" });
+  const bytes = Uint8Array.from(content);
+  const blob = new Blob([bytes], { type: "application/x-sqlite3" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -177,9 +175,7 @@ function saveViaDownload(filename: string, content: Uint8Array): void {
 
 async function saveViaHandle(handle: FileSystemFileHandle, content: Uint8Array): Promise<void> {
   const writable = await handle.createWritable();
-  // Same normalization as in saveViaDownload.
-  const arrayBuffer = new Uint8Array(content).buffer;
-  await writable.write(arrayBuffer);
+  await writable.write(Uint8Array.from(content));
   await writable.close();
 }
 
@@ -324,16 +320,45 @@ function migrateLegacyLocalStorageIntoDb(target: TraekyDb): boolean {
     };
   }
 
-  const currentProfileId =
-    typeof idxObj.currentProfileId === "string" && importedProfiles.some((p) => p.id === idxObj.currentProfileId)
+
+  const existingProfiles = Array.isArray(target.index.profiles) ? target.index.profiles : [];
+  const existingIds = new Set(existingProfiles.map((p) => p.id));
+  const mergedProfiles = [...existingProfiles];
+  for (const p of importedProfiles) {
+    if (!existingIds.has(p.id)) {
+      mergedProfiles.push(p);
+    }
+  }
+
+  const mergedProfileData: Record<ProfileId, EncryptedPayload | undefined> = { ...(target.profileData ?? {}) };
+  let mergedDataCount = 0;
+  for (const [id, payload] of Object.entries(importedProfileData) as Array<[ProfileId, EncryptedPayload | undefined]>) {
+    if (payload && !mergedProfileData[id]) {
+      mergedProfileData[id] = payload;
+      mergedDataCount += 1;
+    }
+  }
+
+  // Prefer existing currentProfileId if it is still valid.
+  const existingCurrent = target.index.currentProfileId;
+  const legacyCurrent =
+    typeof idxObj.currentProfileId === "string" && mergedProfiles.some((p) => p.id === idxObj.currentProfileId)
       ? (idxObj.currentProfileId as ProfileId)
       : importedProfiles[0].id;
 
+  const currentProfileId =
+    existingCurrent && mergedProfiles.some((p) => p.id === existingCurrent) ? existingCurrent : legacyCurrent;
+
+  const addedProfiles = mergedProfiles.length - existingProfiles.length;
+  if (addedProfiles <= 0 && mergedDataCount <= 0) {
+    return false;
+  }
+
   target.index = {
     currentProfileId,
-    profiles: importedProfiles,
+    profiles: mergedProfiles,
   };
-  target.profileData = importedProfileData;
+  target.profileData = mergedProfileData;
   target.meta.revision = Math.max(1, (target.meta.revision ?? 0) + 1);
   target.updatedAt = nowIso();
   return true;
@@ -384,11 +409,10 @@ export async function initDbAuto(defaultLang: Language): Promise<void> {
   notify();
 }
 
-export async function openDbInteractive(fallbackLang?: Language): Promise<void> {
+export async function openDbInteractive(fallbackLang: Language): Promise<void> {
   const file = await pickFileWithFallback();
   if (!file) return;
-  const lang = fallbackLang ?? db?.ui.lang ?? "en";
-  const loaded = await loadDbFromFile(file, lang);
+  const loaded = await loadDbFromFile(file, fallbackLang);
   db = loaded;
   isDirty = false;
   lastSyncedAt = nowIso();
@@ -552,21 +576,9 @@ export function mergeImportedDb(imported: TraekyDb): void {
   markDbDirty();
 }
 
-export async function importDbInteractive(fallbackLang?: Language): Promise<void> {
+export async function importDbInteractive(fallbackLang: Language): Promise<void> {
   const file = await pickFileWithFallback();
   if (!file) return;
-  const lang = fallbackLang ?? db?.ui.lang ?? "en";
-  const imported = await loadDbFromFile(file, lang);
+  const imported = await loadDbFromFile(file, fallbackLang);
   mergeImportedDb(imported);
-}
-
-export function getUiLanguage(fallback: Language): Language {
-  return db?.ui.lang ?? fallback;
-}
-
-export function setUiLanguage(lang: Language): void {
-  if (!db) return;
-  if (db.ui.lang === lang) return;
-  db.ui.lang = lang;
-  markDbDirty();
 }
