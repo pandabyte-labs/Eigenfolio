@@ -276,6 +276,15 @@ body {
   background: rgba(15, 23, 42, 0.85);
 }
 
+/* Compact variant for inline status row (Settings) */
+.sync-button--inline {
+  padding: 6px 10px;
+  font-size: 12px;
+  border-radius: 10px;
+  min-height: 28px;
+}
+
+
 .sync-button:disabled {
   opacity: 0.5;
   cursor: default;
@@ -1325,6 +1334,9 @@ body {
   margin-top: 0.75rem;
   display: grid;
   gap: 0.35rem;
+
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .db-sync-row {
@@ -1336,11 +1348,15 @@ body {
   border: 1px solid var(--border-subtle);
   border-radius: 0.85rem;
   background: rgba(15, 23, 42, 0.35);
+  flex-wrap: nowrap;
 }
 
 .db-sync-label {
   color: var(--text-muted);
   font-size: 0.78rem;
+
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .db-sync-value {
@@ -1348,6 +1364,11 @@ body {
   align-items: center;
   gap: 0.5rem;
   font-weight: 600;
+
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1 1 auto;
+  justify-content: flex-end;
 }
 
 .status-badge {

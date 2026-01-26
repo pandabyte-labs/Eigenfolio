@@ -34,6 +34,7 @@ import {
   createNewDbInteractive,
   importDbInteractive,
   syncDbNow,
+  exportDbNow,
   setUiLanguage,
   getUiLanguage,
 } from "./storage/dbStore";
@@ -1528,6 +1529,19 @@ const handleReloadHoldingPrices = async () => {
                         {t(lang, "db_settings_conflicts")} {dbSyncStatus.conflicts}
                       </span>
                     ) : null}
+                  {dbSyncStatus.isReady && dbSyncStatus.isDirty ? (
+                    <button
+                      className="sync-button sync-dirty sync-button--inline"
+                      onClick={async () => {
+                        await syncDbNow();
+                        setDbSyncStatus(getDbSyncStatus());
+                      }}
+                      aria-label={t(lang, "db_sync_button_aria")}
+                    >
+                      <DatabaseIcon className="sync-icon" />
+                      <span className="sync-label">{t(lang, "db_sync_button_label")}</span>
+                    </button>
+                  ) : null}
                   </span>
                 </div>
                 <div className="db-sync-row" role="listitem">
@@ -1598,13 +1612,14 @@ const handleReloadHoldingPrices = async () => {
 
                 <button
                   type="button"
-                  className={dbSyncStatus.isDirty ? "btn-primary" : "btn-secondary"}
+                  className="btn-secondary"
                   onClick={async () => {
-                    await syncDbNow();
+                    await exportDbNow();
+                    setDbSyncStatus(getDbSyncStatus());
                   }}
                   disabled={!dbSyncStatus.isReady}
                 >
-                  {supportsFileSystemAccessApi ? t(lang, "db_sync_button") : t(lang, "db_export_button")}
+                  {t(lang, "db_export_button")}
                 </button>
               </div>
             </div>

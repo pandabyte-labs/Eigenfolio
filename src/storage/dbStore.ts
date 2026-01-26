@@ -483,7 +483,8 @@ export async function syncDbNow(): Promise<void> {
       }
       await saveViaHandle(handle, binary);
     } else {
-      saveViaDownload(suggested, binary);
+      // Automatic file sync is not available in this browser (e.g. Firefox).
+      // We still persist the snapshot into IndexedDB below so users do not lose data.
     }
   }
 
@@ -498,6 +499,16 @@ export async function syncDbNow(): Promise<void> {
     // ignore
   }
   notify();
+}
+
+export async function exportDbNow(): Promise<void> {
+  if (!db) {
+    throw new Error("Database not loaded");
+  }
+  const binary = await serializeDbToSqlite(db);
+  const name = fileLabel ?? "traeky-db.sqlite";
+  // Explicit user action: export the encrypted DB file via browser download.
+  saveViaDownload(name, binary);
 }
 
 export async function createNewDbInteractive(defaultLang: Language): Promise<void> {
