@@ -44,9 +44,16 @@ const RESET_CONFIRMATION_WORD = "RESET";
 
 const APP_VERSION = packageJson.version;
 
+type FileSystemAccessApiSurface = {
+  showSaveFilePicker?: unknown;
+  showOpenFilePicker?: unknown;
+};
+
+const fileSystemAccessApi = globalThis as unknown as FileSystemAccessApiSurface;
+
 const supportsFileSystemAccessApi =
-  typeof (globalThis as any).showSaveFilePicker === "function" &&
-  typeof (globalThis as any).showOpenFilePicker === "function";
+  typeof fileSystemAccessApi.showSaveFilePicker === "function" &&
+  typeof fileSystemAccessApi.showOpenFilePicker === "function";
 
 type DatabaseIconProps = {
   className?: string;
