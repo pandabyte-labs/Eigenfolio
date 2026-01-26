@@ -7,7 +7,6 @@ import type { ProfileId, ProfilesIndex } from "../auth/profileTypes";
 import type { TraekyDb } from "./traekyDb";
 
 // Vite will bundle the WASM and provide a URL.
-// eslint-disable-next-line import/no-unresolved
 import wasmUrl from "sql.js/dist/sql-wasm.wasm?url";
 
 let sqlJs: SqlJsStatic | null = null;
