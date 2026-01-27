@@ -77,12 +77,6 @@ function looksLikeEncryptedPayload(value: unknown): value is EncryptedPayload {
   );
 }
 
-function looksLikeProfilesIndex(value: unknown): value is LegacyProfilesIndex {
-  if (!isObject(value)) return false;
-  const normalized = normalizeProfilesIndex(value);
-  return !!normalized && normalized.profiles.length > 0;
-}
-
 function looksLikeTraekyDb(value: unknown): value is TraekyDb {
   if (!isObject(value)) return false;
   const v = value as Record<string, unknown>;
