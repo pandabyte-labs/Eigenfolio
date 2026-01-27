@@ -19,6 +19,13 @@ type LegacyProfilesIndex = {
   profiles: ProfileSummary[];
 };
 
+type LegacyProfilesIndexLike = {
+  currentProfileId?: unknown;
+  current_profile_id?: unknown;
+  activeProfileId?: unknown;
+  profiles?: unknown;
+};
+
 type LegacyProfileDataPayloadV1 = {
   version: 1;
   transactions?: Transaction[];
@@ -72,12 +79,8 @@ function looksLikeEncryptedPayload(value: unknown): value is EncryptedPayload {
 
 function looksLikeProfilesIndex(value: unknown): value is LegacyProfilesIndex {
   if (!isObject(value)) return false;
-  const profiles = (value as Record<string, unknown>).profiles;
-  if (!Array.isArray(profiles) || profiles.length === 0) return false;
-  return profiles.every((p) => {
-    if (!isObject(p)) return false;
-    return typeof p.id === "string" && typeof p.name === "string";
-  });
+  const normalized = normalizeProfilesIndex(value);
+  return !!normalized && normalized.profiles.length > 0;
 }
 
 function looksLikeTraekyDb(value: unknown): value is TraekyDb {
@@ -92,10 +95,62 @@ function looksLikeTraekyDb(value: unknown): value is TraekyDb {
 
 function safeJsonParse(raw: string): unknown {
   try {
-    return JSON.parse(raw) as unknown;
+    const parsed = JSON.parse(raw) as unknown;
+    if (typeof parsed === "string") {
+      const trimmed = parsed.trim();
+      if (
+        (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+        (trimmed.startsWith("[") && trimmed.endsWith("]"))
+      ) {
+        try {
+          return JSON.parse(trimmed) as unknown;
+        } catch {
+          return parsed;
+        }
+      }
+    }
+    return parsed;
   } catch {
     return null;
   }
+}
+
+function normalizeProfileSummary(value: unknown): ProfileSummary | null {
+  if (!isObject(value)) return null;
+  const v = value as Record<string, unknown>;
+  const id =
+    (typeof v.id === "string" && v.id) ||
+    (typeof v.profileId === "string" && v.profileId) ||
+    (typeof v.profile_id === "string" && v.profile_id) ||
+    "";
+  const name =
+    (typeof v.name === "string" && v.name) ||
+    (typeof v.profileName === "string" && v.profileName) ||
+    (typeof v.profile_name === "string" && v.profile_name) ||
+    (typeof v.label === "string" && v.label) ||
+    "";
+  if (!id || !name) return null;
+  const createdAt = typeof v.createdAt === "string" ? v.createdAt : typeof v.created_at === "string" ? v.created_at : new Date().toISOString();
+  const updatedAt = typeof v.updatedAt === "string" ? v.updatedAt : typeof v.updated_at === "string" ? v.updated_at : createdAt;
+  return { id, name, createdAt, updatedAt };
+}
+
+function normalizeProfilesIndex(value: unknown): LegacyProfilesIndex | null {
+  if (!isObject(value)) return null;
+  const v = value as LegacyProfilesIndexLike;
+  const profilesRaw = v.profiles;
+  if (!Array.isArray(profilesRaw) || profilesRaw.length === 0) return null;
+  const profiles = profilesRaw.map(normalizeProfileSummary).filter((p): p is ProfileSummary => !!p);
+  if (profiles.length === 0) return null;
+
+  const currentRaw =
+    (v.currentProfileId as unknown) ?? (v.current_profile_id as unknown) ?? (v.activeProfileId as unknown) ?? null;
+  const currentProfileId = typeof currentRaw === "string" && currentRaw.length > 0 ? (currentRaw as ProfileId) : null;
+
+  return {
+    currentProfileId,
+    profiles,
+  };
 }
 
 function createDefaultConfig(): AppConfig {
@@ -240,7 +295,8 @@ function shouldPrepareBackups(storage: Storage): boolean {
 type ScanResult = {
   dbSnapshot: TraekyDb | null;
   profilesIndex: LegacyProfilesIndex | null;
-  encryptedPayloadsByKey: Map<string, EncryptedPayload>;  profileDataMaps: Record<string, EncryptedPayload>[];
+  encryptedPayloadsByKey: Map<string, EncryptedPayload>;
+  profileDataMaps: Record<string, EncryptedPayload>[];
 };
 
 function scanLocalStorage(storage: Storage): ScanResult {
@@ -262,8 +318,9 @@ function scanLocalStorage(storage: Storage): ScanResult {
       continue;
     }
 
-    if (looksLikeProfilesIndex(parsed)) {
-      const candidate = parsed;
+    const candidateIndex = normalizeProfilesIndex(parsed);
+    if (candidateIndex) {
+      const candidate = candidateIndex;
       if (!profilesIndex || candidate.profiles.length > profilesIndex.profiles.length) {
         profilesIndex = candidate;
       }
@@ -296,7 +353,8 @@ function scanLocalStorage(storage: Storage): ScanResult {
   return {
     dbSnapshot,
     profilesIndex,
-    encryptedPayloadsByKey,    profileDataMaps,
+    encryptedPayloadsByKey,
+    profileDataMaps,
   };
 }
 
@@ -342,10 +400,6 @@ function pickEncryptedPayloadForProfile(
  * - Optionally prepares CSV backups when the legacy global key can decrypt the payloads.
  */
 export async function migrateLegacyLocalStorageIntoDb(db: TraekyDb): Promise<LegacyMigrationResult> {
-  if (db.index.profiles.length > 0) {
-    return { migratedProfiles: 0, backupsPrepared: 0, skipped: true, source: "none" };
-  }
-
   const storage = getStorage();
   if (!storage) {
     return { migratedProfiles: 0, backupsPrepared: 0, skipped: true, source: "none" };
@@ -354,20 +408,37 @@ export async function migrateLegacyLocalStorageIntoDb(db: TraekyDb): Promise<Leg
   const scan = scanLocalStorage(storage);
 
   if (scan.dbSnapshot && scan.dbSnapshot.index.profiles.length > 0) {
-    // Direct import of stored DB snapshot.
-    db.createdAt = scan.dbSnapshot.createdAt;
-    db.updatedAt = scan.dbSnapshot.updatedAt;
-    db.index = scan.dbSnapshot.index;
-    db.profileData = scan.dbSnapshot.profileData;
-    // Keep current db.ui when snapshot lacks ui/meta.
-    if (scan.dbSnapshot.ui) {
-      db.ui = scan.dbSnapshot.ui;
-    }
-    if (scan.dbSnapshot.meta) {
-      db.meta = scan.dbSnapshot.meta;
+    const existingIds = new Set(db.index.profiles.map((p) => p.id));
+    const incomingIds = new Set(scan.dbSnapshot.index.profiles.map((p) => p.id));
+    const shouldReplace = db.index.profiles.length === 0;
+
+    if (shouldReplace) {
+      db.createdAt = scan.dbSnapshot.createdAt;
+      db.updatedAt = scan.dbSnapshot.updatedAt;
+      db.index = scan.dbSnapshot.index;
+      db.profileData = scan.dbSnapshot.profileData;
+      if (scan.dbSnapshot.ui) {
+        db.ui = scan.dbSnapshot.ui;
+      }
+      if (scan.dbSnapshot.meta) {
+        db.meta = scan.dbSnapshot.meta;
+      }
+    } else {
+      const nextProfiles = [...db.index.profiles];
+      for (const p of scan.dbSnapshot.index.profiles) {
+        if (existingIds.has(p.id)) continue;
+        nextProfiles.push(p);
+        db.profileData[p.id] = scan.dbSnapshot.profileData[p.id];
+      }
+      db.index.profiles = nextProfiles;
+      if (db.index.currentProfileId && !db.profileData[db.index.currentProfileId]) {
+        db.index.currentProfileId = nextProfiles.length ? nextProfiles[0].id : null;
+      }
     }
     return {
-      migratedProfiles: scan.dbSnapshot.index.profiles.length,
+      migratedProfiles: shouldReplace
+        ? scan.dbSnapshot.index.profiles.length
+        : Array.from(incomingIds).filter((id) => !existingIds.has(id)).length,
       backupsPrepared: 0,
       skipped: false,
       source: "db-snapshot",
@@ -381,7 +452,8 @@ export async function migrateLegacyLocalStorageIntoDb(db: TraekyDb): Promise<Leg
   const legacyKey = getLegacyEncryptionKey();
   const doBackups = shouldPrepareBackups(storage);
 
-  const nextProfiles: ProfileSummary[] = [];
+  const existingIds = new Set(db.index.profiles.map((p) => p.id));
+  const nextProfiles: ProfileSummary[] = [...db.index.profiles];
   let migratedCount = 0;
   let backupCount = 0;
 
@@ -391,9 +463,11 @@ export async function migrateLegacyLocalStorageIntoDb(db: TraekyDb): Promise<Leg
     const encrypted = pickEncryptedPayloadForProfile(meta.id, scan.encryptedPayloadsByKey, scan.profileDataMaps);
     if (!encrypted) continue;
 
-    db.profileData[meta.id] = encrypted;
-    nextProfiles.push(meta);
-    migratedCount += 1;
+    if (!existingIds.has(meta.id)) {
+      db.profileData[meta.id] = encrypted;
+      nextProfiles.push(meta);
+      migratedCount += 1;
+    }
 
     if (doBackups && legacyKey) {
       try {
@@ -414,10 +488,12 @@ export async function migrateLegacyLocalStorageIntoDb(db: TraekyDb): Promise<Leg
   }
 
   db.index.profiles = nextProfiles;
-  db.index.currentProfileId =
-    scan.profilesIndex.currentProfileId && db.profileData[scan.profilesIndex.currentProfileId]
-      ? scan.profilesIndex.currentProfileId
-      : nextProfiles[0].id;
+  if (!db.index.currentProfileId || !db.profileData[db.index.currentProfileId]) {
+    db.index.currentProfileId =
+      scan.profilesIndex.currentProfileId && db.profileData[scan.profilesIndex.currentProfileId]
+        ? scan.profilesIndex.currentProfileId
+        : nextProfiles[0].id;
+  }
 
   return { migratedProfiles: migratedCount, backupsPrepared: backupCount, skipped: false, source: "index+payloads" };
 }
