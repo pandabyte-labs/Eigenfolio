@@ -1,5 +1,5 @@
 import type { EncryptedPayload } from "../crypto/cryptoService";
-import { decryptJsonWithPassphrase } from "../crypto/cryptoService";
+import { decryptJsonWithPassphrase, encryptJsonWithPassphrase } from "../crypto/cryptoService";
 import type { AppConfig, Transaction } from "../domain/types";
 import {
   DEFAULT_HOLDING_PERIOD_DAYS,
@@ -13,6 +13,12 @@ import type { ProfileId, ProfileSummary } from "../auth/profileTypes";
 import type { TraekyDb } from "./traekyDb";
 
 const MIGRATION_CSV_BACKUP_DONE_KEY = "traeky:migration:legacy_csv_backup_done";
+
+const LEGACY_TRANSACTIONS_KEY = "traeky:transactions";
+const LEGACY_NEXT_ID_KEY = "traeky:next-tx-id";
+const LEGACY_CONFIG_KEY = "traeky:app-config";
+const LEGACY_SINGLE_PROFILE_ID = "legacy-profile";
+
 
 type LegacyProfilesIndex = {
   currentProfileId: ProfileId | null;
@@ -107,6 +113,71 @@ function safeJsonParse(raw: string): unknown {
   } catch {
     return null;
   }
+}
+
+function readLegacyTransactions(storage: Storage): Transaction[] {
+  try {
+    const raw = storage.getItem(LEGACY_TRANSACTIONS_KEY);
+    if (!raw) return [];
+    const parsed = safeJsonParse(raw);
+    return Array.isArray(parsed) ? (parsed as Transaction[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function readLegacyNextId(storage: Storage): number | null {
+  try {
+    const raw = storage.getItem(LEGACY_NEXT_ID_KEY);
+    if (!raw) return null;
+    const parsed = parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function readLegacyConfig(storage: Storage): AppConfig | null {
+  try {
+    const raw = storage.getItem(LEGACY_CONFIG_KEY);
+    if (!raw) return null;
+    const parsed = safeJsonParse(raw);
+    if (!isObject(parsed)) return null;
+    const cfg = parsed as Record<string, unknown>;
+    const baseCurrency = cfg.base_currency === "USD" ? "USD" : "EUR";
+    const holding =
+      typeof cfg.holding_period_days === "number" && Number.isFinite(cfg.holding_period_days)
+        ? cfg.holding_period_days
+        : DEFAULT_HOLDING_PERIOD_DAYS;
+    const upcoming =
+      typeof cfg.upcoming_holding_window_days === "number" &&
+      Number.isFinite(cfg.upcoming_holding_window_days)
+        ? cfg.upcoming_holding_window_days
+        : DEFAULT_UPCOMING_WINDOW_DAYS;
+    const priceFetchEnabled = typeof cfg.price_fetch_enabled === "boolean" ? cfg.price_fetch_enabled : true;
+    const coingeckoApiKey = typeof cfg.coingecko_api_key === "string" ? cfg.coingecko_api_key : null;
+
+    return {
+      holding_period_days: holding,
+      upcoming_holding_window_days: upcoming,
+      base_currency: baseCurrency,
+      price_fetch_enabled: priceFetchEnabled,
+      coingecko_api_key: coingeckoApiKey,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function hasLegacySingleProfileData(storage: Storage): boolean {
+  try {
+    return !!storage.getItem(LEGACY_TRANSACTIONS_KEY) || !!storage.getItem(LEGACY_CONFIG_KEY) || !!storage.getItem(LEGACY_NEXT_ID_KEY);
+  } catch {
+    return false;
+  }
+}
+
 }
 
 function normalizeProfileSummary(value: unknown): ProfileSummary | null {
@@ -440,6 +511,38 @@ export async function migrateLegacyLocalStorageIntoDb(db: TraekyDb): Promise<Leg
   }
 
   if (!scan.profilesIndex || scan.profilesIndex.profiles.length === 0) {
+    if (db.index.profiles.length === 0 && hasLegacySingleProfileData(storage)) {
+      const legacyKey = getLegacyEncryptionKey();
+      if (!legacyKey) {
+        return { migratedProfiles: 0, backupsPrepared: 0, skipped: true, source: "none" };
+      }
+      const transactions = readLegacyTransactions(storage);
+      const nextId =
+        readLegacyNextId(storage) ??
+        (transactions.length
+          ? transactions.reduce((acc, tx) => (tx.id && tx.id > acc ? tx.id : acc), 0) + 1
+          : 1);
+      const config = readLegacyConfig(storage) ?? createDefaultConfig();
+      const payload: MigratedProfileDataPayloadV2 = {
+        version: 2,
+        transactions,
+        nextTransactionId: nextId,
+        config,
+      };
+      const encrypted = await encryptJsonWithPassphrase(payload, legacyKey);
+      db.profileData[LEGACY_SINGLE_PROFILE_ID] = { ...encrypted, scope: "legacy-appkey" };
+      const now = new Date().toISOString();
+      db.index.profiles = [
+        {
+          id: LEGACY_SINGLE_PROFILE_ID,
+          name: "Default",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ];
+      db.index.currentProfileId = LEGACY_SINGLE_PROFILE_ID;
+      return { migratedProfiles: 1, backupsPrepared: 0, skipped: false, source: "index+payloads" };
+    }
     return { migratedProfiles: 0, backupsPrepared: 0, skipped: true, source: "none" };
   }
 
