@@ -1,6 +1,7 @@
 import { idbGet, idbSet } from "./idb";
 import { createEmptyDb, parseDb, serializeDb, type TraekyDb } from "./traekyDb";
 import type { Language } from "../i18n";
+import { migrateLegacyLocalStorageIntoDb } from "./legacyLocalStorageMigration";
 
 // Note: The DB file is treated as an opaque payload from the UI perspective.
 // We use a .sqlite filename for user familiarity; the app's serializer controls the actual content.
@@ -154,8 +155,21 @@ export async function initDbAuto(defaultLang: Language): Promise<void> {
   fileLabel = null;
   lastSyncedAt = null;
   conflicts = 0;
-  notify();
   await tryReadBoundHandle();
+  if (db.index.profiles.length === 0) {
+    await migrateLegacyLocalStorageIntoDb(db);
+  }
+  notify();
+}
+
+export function createNewDbFileLabel(): void {
+  if (!db) {
+    throw new Error("Database not loaded");
+  }
+  if (!fileLabel) {
+    fileLabel = DEFAULT_DB_FILE_NAME;
+    notify();
+  }
 }
 
 async function pickFileWithFallback(accept: string, opts?: { persistHandle?: boolean }): Promise<File | null> {
@@ -377,4 +391,6 @@ export async function importDbInteractive(): Promise<void> {
   const text = await readFileAsText(file);
   const imported = parseDb(text);
   mergeImportedDb(imported);
+  fileLabel = file.name;
+  notify();
 }

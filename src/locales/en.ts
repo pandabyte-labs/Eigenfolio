@@ -87,6 +87,7 @@ export const en: Record<string, string> = {
   db_select_description:
     "Traeky stores all profiles and transactions in a local DB file. For cloud storage, export/import the encrypted file manually.",
   db_select_description_firefox: "Note (Firefox): Without the File System Access API, syncing works via export/import. Configure Firefox to ask for a save location so you can overwrite the same file.",
+  db_create_button: "Create new database",
   db_open_button: "Open database",
   db_open_import_hint:
     "Open links a file (Chrome/Edge) so future syncs overwrite it. Import loads a file once; use Export to save changes.",

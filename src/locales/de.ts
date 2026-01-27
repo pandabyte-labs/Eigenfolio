@@ -87,6 +87,7 @@ export const de: Record<string, string> = {
   db_select_description:
     "Traeky speichert alle Profile und Transaktionen in einer lokalen DB-Datei. Für Cloud-Speicherung exportiere/importiere die verschlüsselte Datei manuell.",
   db_select_description_firefox: "Hinweis (Firefox): Ohne Dateizugriffs-API erfolgt der Sync über Export/Import. Stelle sicher, dass Firefox beim Speichern nach einem Ort fragt, damit du dieselbe Datei wieder überschreiben kannst.",
+  db_create_button: "Neue Datenbank erstellen",
   db_open_button: "Datenbank öffnen",
   db_import_button: "Datenbank importieren",
   db_export_button: "Datenbank exportieren",

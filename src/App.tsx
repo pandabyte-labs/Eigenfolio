@@ -30,6 +30,7 @@ import {
   initDbAuto,
   subscribeDb,
   getDbSyncStatus,
+  createNewDbFileLabel,
   openDbInteractive,
   importDbInteractive,
   syncDbNow,
@@ -1253,6 +1254,21 @@ const handleReloadHoldingPrices = async () => {
               <button
                 type="button"
                 className="btn-primary"
+                onClick={() => {
+                  createNewDbFileLabel();
+                  setLang(getUiLanguage(defaultLang));
+                  const overview = getProfileOverview();
+                  setProfileOverview(overview);
+                  if (overview.profiles.length > 0) {
+                    setLoginProfileId(overview.profiles[0].id);
+                  }
+                }}
+              >
+                {t(lang, "db_create_button")}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
                 onClick={async () => {
                   await openDbInteractive();
                   setLang(getUiLanguage(defaultLang));
