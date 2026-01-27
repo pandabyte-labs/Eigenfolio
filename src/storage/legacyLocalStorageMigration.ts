@@ -178,7 +178,6 @@ function hasLegacySingleProfileData(storage: Storage): boolean {
   }
 }
 
-}
 
 function normalizeProfileSummary(value: unknown): ProfileSummary | null {
   if (!isObject(value)) return null;
